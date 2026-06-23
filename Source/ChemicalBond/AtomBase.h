@@ -16,6 +16,9 @@ struct FBondRecord
     GENERATED_BODY()
 
     UPROPERTY(BlueprintReadOnly, Category = "键")
+    FGuid BondUid;
+
+    UPROPERTY(BlueprintReadOnly, Category = "键")
     TWeakObjectPtr<AAtomBase> PartnerAtom;
 
     UPROPERTY(BlueprintReadOnly, Category = "键")
@@ -42,6 +45,7 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     void ApplyRuntimeAtomData(EAtomElementType InElementType, float InMass, int32 InTotalSlots, bool bInCanFormRing);
 
@@ -109,6 +113,15 @@ public:
     EAtomElementType GetElementType() const { return ElementType; }
 
     UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    FGuid GetAtomUid() const { return AtomUid; }
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    bool HasAtomUid() const { return AtomUid.IsValid(); }
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    TArray<FGuid> GetBondUids() const { return BondUids; }
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
     UFluidMotionComponent* GetFluidMotionComponent() const { return FluidMotionComponent; }
 
     // -----------------------------------------------------------------------
@@ -120,7 +133,19 @@ public:
     bool AddBond(AAtomBase* Partner, EBondType InBondType, int32 MySlot, int32 PartnerSlot);
 
     UFUNCTION(BlueprintCallable, Category = "原子|连接")
+    bool AddBondWithUid(FGuid InBondUid, AAtomBase* Partner, EBondType InBondType, int32 MySlot, int32 PartnerSlot);
+
+    UFUNCTION(BlueprintCallable, Category = "原子|连接")
     bool RemoveBond(int32 MySlotIndex);
+
+    UFUNCTION(BlueprintCallable, Category = "原子|连接")
+    bool RemoveBondByUid(FGuid InBondUid);
+
+    UFUNCTION(BlueprintCallable, Category = "原子|注册表")
+    void AssignAtomUid(FGuid InAtomUid);
+
+    UFUNCTION(BlueprintCallable, Category = "原子|注册表")
+    void ClearAtomUid();
 
     // -----------------------------------------------------------------------
     // Blueprint 可调用方法 — 状态
@@ -136,6 +161,12 @@ private:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "原子|运动", meta = (AllowPrivateAccess = "true"))
     UFluidMotionComponent* FluidMotionComponent = nullptr;
 
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "原子|注册表", meta = (AllowPrivateAccess = "true"))
+    FGuid AtomUid;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "原子|注册表", meta = (AllowPrivateAccess = "true"))
+    TArray<FGuid> BondUids;
+
     // 槽位占用状态，长度 = TotalSlots，由 InitFromDataTable 初始化
     UPROPERTY()
     TArray<bool> SlotOccupied;
@@ -147,6 +178,8 @@ private:
     EAtomState AtomState = EAtomState::Free;
 
     void InitFromDataTable();
+    void TryRegisterWithDirector();
+    void TryUnregisterFromDirector();
 
     UFUNCTION()
     void HandleProximitySphereOverlap(

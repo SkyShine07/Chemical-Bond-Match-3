@@ -1,5 +1,7 @@
 #include "AtomBase.h"
 
+#include "Game/ChemicalBondGameDirector.h"
+#include "Game/ChemicalBondGameMode.h"
 #include "Movement/FluidMotionComponent.h"
 
 AAtomBase::AAtomBase()
@@ -26,6 +28,15 @@ void AAtomBase::BeginPlay()
     ProximitySphere->SetSphereRadius(ProximityRadius);
     ProximitySphere->OnComponentBeginOverlap.AddDynamic(
         this, &AAtomBase::HandleProximitySphereOverlap);
+
+    TryRegisterWithDirector();
+}
+
+void AAtomBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    TryUnregisterFromDirector();
+
+    Super::EndPlay(EndPlayReason);
 }
 
 void AAtomBase::InitFromDataTable()
@@ -98,18 +109,30 @@ int32 AAtomBase::FindFreeSlotIndex() const
 
 bool AAtomBase::AddBond(AAtomBase* Partner, EBondType InBondType, int32 MySlot, int32 PartnerSlot)
 {
+    return AddBondWithUid(FGuid(), Partner, InBondType, MySlot, PartnerSlot);
+}
+
+bool AAtomBase::AddBondWithUid(FGuid InBondUid, AAtomBase* Partner, EBondType InBondType, int32 MySlot, int32 PartnerSlot)
+{
     if (!Partner) return false;
     if (MySlot < 0 || MySlot >= TotalSlots) return false;
     if (SlotOccupied[MySlot]) return false;
+    if (InBondUid.IsValid() && BondUids.Contains(InBondUid)) return false;
 
     SlotOccupied[MySlot] = true;
 
     FBondRecord Record;
+    Record.BondUid         = InBondUid;
     Record.PartnerAtom     = Partner;
     Record.BondType        = InBondType;
     Record.MySlotIndex     = MySlot;
     Record.PartnerSlotIndex = PartnerSlot;
     Bonds.Add(Record);
+
+    if (InBondUid.IsValid())
+    {
+        BondUids.Add(InBondUid);
+    }
 
     return true;
 }
@@ -125,6 +148,10 @@ bool AAtomBase::RemoveBond(int32 MySlotIndex)
     {
         if (Bonds[i].MySlotIndex == MySlotIndex)
         {
+            if (Bonds[i].BondUid.IsValid())
+            {
+                BondUids.Remove(Bonds[i].BondUid);
+            }
             Bonds.RemoveAt(i);
             break;
         }
@@ -132,10 +159,72 @@ bool AAtomBase::RemoveBond(int32 MySlotIndex)
     return true;
 }
 
+bool AAtomBase::RemoveBondByUid(FGuid InBondUid)
+{
+    if (!InBondUid.IsValid()) return false;
+
+    for (int32 i = Bonds.Num() - 1; i >= 0; --i)
+    {
+        if (Bonds[i].BondUid == InBondUid)
+        {
+            const int32 MySlotIndex = Bonds[i].MySlotIndex;
+            if (MySlotIndex >= 0 && MySlotIndex < SlotOccupied.Num())
+            {
+                SlotOccupied[MySlotIndex] = false;
+            }
+
+            Bonds.RemoveAt(i);
+            BondUids.Remove(InBondUid);
+            return true;
+        }
+    }
+
+    BondUids.Remove(InBondUid);
+    return false;
+}
+
+void AAtomBase::AssignAtomUid(FGuid InAtomUid)
+{
+    AtomUid = InAtomUid;
+}
+
+void AAtomBase::ClearAtomUid()
+{
+    AtomUid.Invalidate();
+}
+
 void AAtomBase::SetAtomState(EAtomState NewState)
 {
     AtomState = NewState;
     OnAtomStateChanged(NewState);
+}
+
+void AAtomBase::TryRegisterWithDirector()
+{
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    AChemicalBondGameMode* ChemicalBondGameMode = World->GetAuthGameMode<AChemicalBondGameMode>();
+    if (!ChemicalBondGameMode) return;
+
+    AChemicalBondGameDirector* GameDirector = ChemicalBondGameMode->GetGameDirector();
+    if (!GameDirector) return;
+
+    GameDirector->SpawnAtom(this);
+}
+
+void AAtomBase::TryUnregisterFromDirector()
+{
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    AChemicalBondGameMode* ChemicalBondGameMode = World->GetAuthGameMode<AChemicalBondGameMode>();
+    if (!ChemicalBondGameMode) return;
+
+    AChemicalBondGameDirector* GameDirector = ChemicalBondGameMode->GetGameDirector();
+    if (!GameDirector) return;
+
+    GameDirector->TerminateAtom(this);
 }
 
 void AAtomBase::HandleProximitySphereOverlap(
