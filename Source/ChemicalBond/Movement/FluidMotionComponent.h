@@ -91,7 +91,7 @@ protected:
 	// 蓝图配置：Class=玩家基团，Range=0.0..100000.0，
 	// Effect=冲刺开启时额外叠加在移动方向上的推进力。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Force", meta=(ClampMin="0.0"))
-	float SprintForce = 7200.f;
+	float SprintForce = 7600.f;
 
 	// 蓝图配置：Class=可旋转基团，Range=0.0..100000.0，
 	// Effect=Q/E 或其他旋转输入产生的偏航力矩。
@@ -101,17 +101,17 @@ protected:
 	// 蓝图配置：Class=所有挂接 FluidMotionComponent 的可移动对象，Range=0.0..10000.0，
 	// Effect=速度越大时固定比例抵消线速度，提供基础液体阻力。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Drag", meta=(ClampMin="0.0"))
-	float LinearDrag = 3.5f;
+	float LinearDrag = 2.f;
 
 	// 蓝图配置：Class=所有挂接 FluidMotionComponent 的可移动对象，Range=0.0..10000.0，
 	// Effect=速度越快时阻力增长越明显，用于制造液体中的速度上限感。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Drag", meta=(ClampMin="0.0"))
-	float QuadraticDrag = 0.015f;
+	float QuadraticDrag = 0.01f;
 
 	// 蓝图配置：Class=所有可旋转对象，Range=0.0..10000.0，
 	// Effect=抵消偏航角速度，提供旋转阻力。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Drag", meta=(ClampMin="0.0"))
-	float AngularDrag = 4.f;
+	float AngularDrag = 10.f;
 
 	// 蓝图配置：Class=所有挂接 FluidMotionComponent 的可移动对象，Range=0.0..100000.0，
 	// Effect=限制最大线速度，防止连续受力后速度失控。
@@ -121,27 +121,27 @@ protected:
 	// 蓝图配置：Class=所有可旋转对象，Range=0.0..3600.0，
 	// Effect=限制最大偏航角速度，单位为度/秒。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Limits", meta=(ClampMin="0.0"))
-	float MaxYawSpeed = 240.f;
+	float MaxYawSpeed = 200.f;
 
 	// 蓝图配置：Class=所有挂接 FluidMotionComponent 的可移动对象，Range=0.0..100.0，
 	// Effect=速度低于该值且没有输入时归零，避免对象无限微小滑动。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Limits", meta=(ClampMin="0.0"))
-	float StopLinearSpeedThreshold = 2.f;
+	float StopLinearSpeedThreshold = 150.f;
 
 	// 蓝图配置：Class=所有可旋转对象，Range=0.0..100.0，
 	// Effect=偏航角速度低于该值且没有输入时归零。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Limits", meta=(ClampMin="0.0"))
-	float StopYawSpeedThreshold = 1.f;
+	float StopYawSpeedThreshold = 30.f;
 
 	// 蓝图配置：Class=需要轻微漂浮感的对象，Range=0.0..10000.0，
 	// Effect=持续加入低频扰动力；0 表示关闭漂浮扰动。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Float", meta=(ClampMin="0.0"))
-	float FloatingDisturbanceForce = 0.f;
+	float FloatingDisturbanceForce = 50.f;
 
 	// 蓝图配置：Class=需要轻微漂浮感的对象，Range=0.01..10.0，
 	// Effect=控制漂浮扰动变化速度；数值越大，扰动变化越快。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|FluidMotion|Float", meta=(ClampMin="0.01"))
-	float FloatingDisturbanceFrequency = 0.35f;
+	float FloatingDisturbanceFrequency = 0.7f;
 
 private:
 	// 运行时状态
