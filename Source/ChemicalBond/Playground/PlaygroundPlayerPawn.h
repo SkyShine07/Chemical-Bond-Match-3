@@ -1,11 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Pawn.h"
+#include "../AtomBase.h"
 #include "PlaygroundPlayerPawn.generated.h"
 
 class UCameraComponent;
-class UFluidMotionComponent;
 class USphereComponent;
 class USpringArmComponent;
 class UStaticMeshComponent;
@@ -14,7 +13,7 @@ class UTextRenderComponent;
 // Playground 专用 C_Player 玩家粒子，用于 PIE 直接验证 FluidMotionComponent 手感。
 // 输入在 Tick 中读取键盘状态，避免污染正式 Enhanced Input 配置。
 UCLASS(Blueprintable)
-class CHEMICALBOND_API APlaygroundPlayerPawn : public APawn
+class CHEMICALBOND_API APlaygroundPlayerPawn : public AAtomBase
 {
 	GENERATED_BODY()
 
@@ -22,11 +21,9 @@ public:
 	APlaygroundPlayerPawn();
 
 	// 生命周期
+	virtual void PreInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
-
-	UFUNCTION(BlueprintPure, Category="ChemicalBond|Playground")
-	UFluidMotionComponent* GetFluidMotionComponent() const { return FluidMotionComponent; }
 
 protected:
 	// 策划配置
@@ -47,13 +44,14 @@ private:
 	TObjectPtr<UTextRenderComponent> ElementLabel = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Playground", meta=(AllowPrivateAccess="true"))
-	TObjectPtr<UFluidMotionComponent> FluidMotionComponent = nullptr;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Playground", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USpringArmComponent> CameraBoom = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Playground", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCameraComponent> Camera = nullptr;
 
 	void PollPlaygroundInput();
+	void PollConnectionDecisionInput(const APlayerController* PlayerController);
+
+	bool bWasSpaceDown = false;
+	bool bWasFDown = false;
 };

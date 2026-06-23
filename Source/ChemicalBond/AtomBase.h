@@ -1,13 +1,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "GameFramework/Pawn.h"
 #include "Components/SphereComponent.h"
 #include "AtomTypes.h"
 #include "AtomBase.generated.h"
 
 class AAtomBase;
 class UFluidMotionComponent;
+class UStaticMeshComponent;
 
 // 存在原子上的单条键记录
 USTRUCT(BlueprintType)
@@ -31,23 +32,33 @@ struct FBondRecord
     // 对方原子占用的槽位索引
     UPROPERTY(BlueprintReadOnly, Category = "键")
     int32 PartnerSlotIndex = INDEX_NONE;
+
+    UPROPERTY(BlueprintReadOnly, Category = "键")
+    TArray<int32> MySlotIndices;
+
+    UPROPERTY(BlueprintReadOnly, Category = "键")
+    TArray<int32> PartnerSlotIndices;
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnAtomProximityEnter, AAtomBase*, OtherAtom);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAtomProximityEnter, AAtomBase*, SourceAtom, AAtomBase*, OtherAtom);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAtomProximityExit, AAtomBase*, SourceAtom, AAtomBase*, OtherAtom);
 
+// 原子 Pawn 基类，维护槽位、键记录、状态机、交互检测和底部交互范围指示盘。
 UCLASS(Abstract)
-class CHEMICALBOND_API AAtomBase : public AActor
+class CHEMICALBOND_API AAtomBase : public APawn
 {
     GENERATED_BODY()
 
 public:
     AAtomBase();
+    virtual void Tick(float DeltaSeconds) override;
 
 protected:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
     void ApplyRuntimeAtomData(EAtomElementType InElementType, float InMass, int32 InTotalSlots, bool bInCanFormRing);
+    void SetInitialAtomState(EAtomState NewState);
 
     // -----------------------------------------------------------------------
     // 配置属性（在 Blueprint 子类的 Default 面板中设置）
@@ -84,6 +95,9 @@ public:
     // 接近范围内出现其他原子时广播，由上层决策系统监听
     UPROPERTY(BlueprintAssignable, Category = "原子|事件")
     FOnAtomProximityEnter OnProximityEnter;
+
+    UPROPERTY(BlueprintAssignable, Category = "原子|事件")
+    FOnAtomProximityExit OnProximityExit;
 
     // 状态变化时由 Blueprint 子类实现视觉反馈
     UFUNCTION(BlueprintImplementableEvent, Category = "原子|事件")
@@ -124,6 +138,18 @@ public:
     UFUNCTION(BlueprintCallable, Category = "原子|查询")
     UFluidMotionComponent* GetFluidMotionComponent() const { return FluidMotionComponent; }
 
+    UFUNCTION(BlueprintCallable, Category = "ChemicalBond|Plane")
+    void ConstrainToGameplayPlane();
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    float GetProximityRadius() const { return ProximityRadius; }
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    bool IsInteractionCoolingDown() const;
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    bool IsProximityOverlappingAtom(AAtomBase* OtherAtom) const;
+
     // -----------------------------------------------------------------------
     // Blueprint 可调用方法 — 槽位与键操作
     // -----------------------------------------------------------------------
@@ -141,6 +167,15 @@ public:
     UFUNCTION(BlueprintCallable, Category = "原子|连接")
     bool RemoveBondByUid(FGuid InBondUid);
 
+    UFUNCTION(BlueprintCallable, Category = "原子|连接")
+    bool SetBondTypeByUid(FGuid InBondUid, EBondType NewBondType);
+
+    UFUNCTION(BlueprintCallable, Category = "原子|连接")
+    bool AddBondSlotByUid(FGuid InBondUid, int32 MySlot, int32 PartnerSlot);
+
+    UFUNCTION(BlueprintCallable, Category = "原子|连接")
+    bool RemoveBondSlotByUid(FGuid InBondUid, int32 MySlot, int32 PartnerSlot);
+
     UFUNCTION(BlueprintCallable, Category = "原子|注册表")
     void AssignAtomUid(FGuid InAtomUid);
 
@@ -154,9 +189,15 @@ public:
     UFUNCTION(BlueprintCallable, Category = "原子|状态")
     void SetAtomState(EAtomState NewState);
 
+    UFUNCTION(BlueprintCallable, Category = "原子|状态")
+    void BeginInteractionCooldown(float CooldownSeconds);
+
 private:
     UPROPERTY()
     USphereComponent* ProximitySphere = nullptr;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "原子|交互范围", meta = (AllowPrivateAccess = "true"))
+    UStaticMeshComponent* ProximityVisualMesh = nullptr;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "原子|运动", meta = (AllowPrivateAccess = "true"))
     UFluidMotionComponent* FluidMotionComponent = nullptr;
@@ -177,7 +218,13 @@ private:
     UPROPERTY()
     EAtomState AtomState = EAtomState::Free;
 
+    UPROPERTY(Transient)
+    float InteractionCooldownEndTime = 0.f;
+
     void InitFromDataTable();
+    void ApplyTemporaryInteractionRadiusFromMass();
+    void RefreshProximityVisual();
+    void DrawProximityIndicator();
     void TryRegisterWithDirector();
     void TryUnregisterFromDirector();
 
@@ -189,4 +236,11 @@ private:
         int32 OtherBodyIndex,
         bool bFromSweep,
         const FHitResult& SweepResult);
+
+    UFUNCTION()
+    void HandleProximitySphereEndOverlap(
+        UPrimitiveComponent* OverlappedComponent,
+        AActor* OtherActor,
+        UPrimitiveComponent* OtherComp,
+        int32 OtherBodyIndex);
 };

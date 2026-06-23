@@ -42,8 +42,59 @@ struct FChemicalBondRegistryRecord
 	int32 AtomBSlotIndex = INDEX_NONE;
 };
 
-// 单局规则编排入口，负责局内系统的生命周期调度和后续业务系统接入。
-// 同时维护场上原子和化学键 UID 注册表；玩法状态机和交互规则逐项接入。
+USTRUCT(BlueprintType)
+struct FAtomInteractionPairKey
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category="ChemicalBond|Connection")
+	FGuid FirstAtomUid;
+
+	UPROPERTY(BlueprintReadOnly, Category="ChemicalBond|Connection")
+	FGuid SecondAtomUid;
+
+	bool IsValid() const
+	{
+		return FirstAtomUid.IsValid() && SecondAtomUid.IsValid() && FirstAtomUid != SecondAtomUid;
+	}
+
+	bool operator==(const FAtomInteractionPairKey& Other) const
+	{
+		return FirstAtomUid == Other.FirstAtomUid && SecondAtomUid == Other.SecondAtomUid;
+	}
+};
+
+FORCEINLINE uint32 GetTypeHash(const FAtomInteractionPairKey& Key)
+{
+	return HashCombine(GetTypeHash(Key.FirstAtomUid), GetTypeHash(Key.SecondAtomUid));
+}
+
+USTRUCT()
+struct FAtomConnectionCandidate
+{
+	GENERATED_BODY()
+
+	FAtomInteractionPairKey PairKey;
+	TWeakObjectPtr<AAtomBase> AtomA;
+	TWeakObjectPtr<AAtomBase> AtomB;
+	float RemainingConfirmationSeconds = 0.f;
+};
+
+USTRUCT()
+struct FAtomDecisionRequest
+{
+	GENERATED_BODY()
+
+	FAtomInteractionPairKey PairKey;
+	TWeakObjectPtr<AAtomBase> ConnectedAtom;
+	TWeakObjectPtr<AAtomBase> FreeAtom;
+	float RemainingDecisionSeconds = 0.f;
+	FGuid BondUid;
+	bool bHasFormedBond = false;
+};
+
+// 单局规则编排入口，负责局内系统生命周期、原子/化学键注册表、连接决策队列和临时基团物理连接。
+// 后续分子图、危害、胜负和正式物理约束在设计确认后继续接入。
 UCLASS(Blueprintable)
 class CHEMICALBOND_API AChemicalBondGameDirector : public AActor
 {
@@ -106,6 +157,25 @@ public:
 	UFUNCTION(BlueprintPure, Category="ChemicalBond|Registry")
 	TArray<FGuid> GetAllBondUids() const;
 
+	// 连接决策 API
+	UFUNCTION(BlueprintCallable, Category="ChemicalBond|Connection")
+	void HandleAtomProximityEnter(AAtomBase* AtomA, AAtomBase* AtomB);
+
+	UFUNCTION(BlueprintCallable, Category="ChemicalBond|Connection")
+	void HandleAtomProximityExit(AAtomBase* AtomA, AAtomBase* AtomB);
+
+	UFUNCTION(BlueprintCallable, Category="ChemicalBond|Connection")
+	bool HandleDecisionConfirmInput();
+
+	UFUNCTION(BlueprintCallable, Category="ChemicalBond|Connection")
+	bool HandleDecisionRejectInput();
+
+	UFUNCTION(BlueprintCallable, Category="ChemicalBond|Connection")
+	void MarkAtomAsPlayerConnected(AAtomBase* Atom);
+
+	bool ValidateBondRegistryConsistency(FString& OutError) const;
+	void AssertBondRegistryConsistency();
+
 protected:
 	// 生命周期
 	virtual void BeginPlay() override;
@@ -134,10 +204,97 @@ private:
 	UPROPERTY(Transient)
 	TArray<FGuid> TripleBondUids;
 
+	// 策划配置
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.0..10.0 秒，
+	// Effect=交互范围交叉后等待多久再结算连接条件；0 表示立刻结算。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Connection", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float ContactConfirmationSeconds = 0.2f;
+
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.0..30.0 秒，
+	// Effect=玩家处理待决策连接的基准窗口，后续温度系统可在此基础上修正。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Connection", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float DecisionWindowSeconds = 2.f;
+
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.0..100000.0，
+	// Effect=轻轻推离的基础冲量，质量系数会在此基础上影响推离强度。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Connection", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float GentleRepulsionImpulse = 1800.f;
+
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.0..1000.0，
+	// Effect=原子量对轻轻推离冲量的影响系数。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Connection", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float GentleRepulsionMassScale = 8.f;
+
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.0..10.0 秒，
+	// Effect=轻轻推离后两个原子忽略交互结算的时间窗口。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Connection", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float InteractionCooldownSeconds = 0.35f;
+
+	UPROPERTY(Transient)
+	TMap<FAtomInteractionPairKey, FAtomConnectionCandidate> ConnectionCandidates;
+
+	UPROPERTY(Transient)
+	TArray<FAtomDecisionRequest> DecisionQueue;
+
+	UPROPERTY(Transient)
+	FAtomDecisionRequest ActiveDecisionRequest;
+
+	UPROPERTY(Transient)
+	bool bHasActiveDecisionRequest = false;
+
+	UPROPERTY(Transient)
+	TSet<FAtomInteractionPairKey> QueuedDecisionPairKeys;
+
+	UPROPERTY(Transient)
+	TSet<FGuid> LockedAtomUids;
+
+	TMap<FGuid, TMap<FGuid, FTransform>> RigidGroupLocalTransforms;
+
 	FGuid GenerateUniqueAtomUid() const;
 	FGuid GenerateUniqueBondUid() const;
 	void RegisterExistingAtomsInWorld();
 	void AddBondUidToTypeList(FGuid BondUid, EBondType BondType);
 	void RemoveBondUidFromTypeList(FGuid BondUid, EBondType BondType);
 	TArray<FGuid> GetAtomBondUidsForTermination(FGuid AtomUid, AAtomBase* Atom) const;
+	bool DoesTypeListContainBond(FGuid BondUid, EBondType BondType) const;
+	bool DoesOtherTypeListContainBond(FGuid BondUid, EBondType BondType) const;
+	void RebuildRegistriesFromAtomData();
+	void HandleBondRegistryMismatch(const FString& ErrorMessage);
+	void BindAtomConnectionEvents(AAtomBase* Atom);
+	FAtomInteractionPairKey MakePairKey(AAtomBase* AtomA, AAtomBase* AtomB);
+	void ProcessConnectionCandidates(float DeltaSeconds);
+	void ProcessActiveDecision(float DeltaSeconds);
+	void ProcessPhysicalConnections(float DeltaSeconds);
+	void ConstrainRegisteredAtomsToGameplayPlane() const;
+	void ProcessPlayerRigidGroups(TSet<FAtomInteractionPairKey>& OutHandledPairKeys);
+	void CollectBondedGroup(AAtomBase* RootAtom, TArray<AAtomBase*>& OutAtoms, TSet<FAtomInteractionPairKey>& OutPairKeys);
+	void AddConnectedNeighbor(
+		AAtomBase* SourceAtom,
+		AAtomBase* NeighborAtom,
+		TArray<AAtomBase*>& PendingAtoms,
+		TSet<FGuid>& VisitedAtomUids,
+		TSet<FAtomInteractionPairKey>& OutPairKeys);
+	bool ApplyPairConstraintIfUnhandled(
+		AAtomBase* AtomA,
+		AAtomBase* AtomB,
+		const TSet<FAtomInteractionPairKey>& HandledPairKeys,
+		const TCHAR* Reason);
+	void ApplyConnectionPullConstraint(AAtomBase* AnchorAtom, AAtomBase* PulledAtom, const TCHAR* Reason);
+	void SettleConnectionCandidate(const FAtomConnectionCandidate& Candidate);
+	void EnqueueDecisionRequest(AAtomBase* ConnectedAtom, AAtomBase* FreeAtom, const FAtomInteractionPairKey& PairKey);
+	void StartNextDecisionRequest();
+	void FinishActiveDecision(bool bRejected);
+	bool TryAdvanceActiveDecisionBond();
+	bool ChangeBondType(FGuid BondUid, EBondType NewBondType, int32 AtomAAdditionalSlot, int32 AtomBAdditionalSlot);
+	bool FindExistingBondBetween(AAtomBase* AtomA, AAtomBase* AtomB, FGuid& OutBondUid, EBondType& OutBondType) const;
+	void SetAtomGroupState(AAtomBase* RootAtom, EAtomState NewState);
+	void ApplyFixedConnectionConstraint(AAtomBase* AtomA, AAtomBase* AtomB, const TCHAR* Reason);
+	AAtomBase* ChooseConnectionAnchor(AAtomBase* AtomA, AAtomBase* AtomB) const;
+	void StopConstrainedAtomMotion(AAtomBase* Atom) const;
+	void ApplyGentleRepulsion(AAtomBase* AtomA, AAtomBase* AtomB, const TCHAR* Reason);
+	bool CanAtomsStartConnection(AAtomBase* AtomA, AAtomBase* AtomB, FString& OutReason) const;
+	bool IsAtomLocked(AAtomBase* Atom) const;
+	void LockAtom(AAtomBase* Atom);
+	void UnlockAtom(AAtomBase* Atom);
+	void ReleaseDecisionPair(const FAtomInteractionPairKey& PairKey);
 };

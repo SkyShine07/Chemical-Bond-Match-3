@@ -177,6 +177,7 @@ private:
 	void IntegrateYawVelocity(float DeltaTime);
 	void MoveOwner(float DeltaTime);
 	void RotateOwner(float DeltaTime);
+	void ConstrainOwnerToGameplayPlane() const;
 	float GetSafeMass() const;
 	FVector GetFloatingForce(float TimeSeconds) const;
 };

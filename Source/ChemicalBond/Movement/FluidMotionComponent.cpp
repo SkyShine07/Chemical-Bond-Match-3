@@ -1,5 +1,6 @@
 #include "FluidMotionComponent.h"
 
+#include "../AtomTypes.h"
 #include "GameFramework/Actor.h"
 
 DEFINE_LOG_CATEGORY(LogChemicalBondFluidMotion);
@@ -17,6 +18,7 @@ void UFluidMotionComponent::BeginPlay()
 	Super::BeginPlay();
 
 	SetEffectiveMass(EffectiveMass > 0.f ? EffectiveMass : DefaultMass);
+	ConstrainOwnerToGameplayPlane();
 }
 
 void UFluidMotionComponent::TickComponent(
@@ -46,7 +48,7 @@ void UFluidMotionComponent::SetMoveInput(FVector WorldDirection, float Scale)
 		return;
 	}
 
-	MoveInput = WorldDirection.GetSafeNormal() * FMath::Clamp(Scale, -1.f, 1.f);
+	MoveInput = ChemicalBondGameplayPlane::ProjectVector(WorldDirection).GetSafeNormal() * FMath::Clamp(Scale, -1.f, 1.f);
 }
 
 void UFluidMotionComponent::ClearMoveInput()
@@ -71,12 +73,13 @@ void UFluidMotionComponent::SetSprintActive(bool bActive)
 
 void UFluidMotionComponent::AddLinearForce(FVector Force)
 {
-	PendingForce += Force;
+	PendingForce += ChemicalBondGameplayPlane::ProjectVector(Force);
 }
 
 void UFluidMotionComponent::AddLinearImpulse(FVector Impulse)
 {
-	LinearVelocity += Impulse / GetSafeMass();
+	LinearVelocity += ChemicalBondGameplayPlane::ProjectVector(Impulse) / GetSafeMass();
+	LinearVelocity = ChemicalBondGameplayPlane::ProjectVector(LinearVelocity);
 }
 
 void UFluidMotionComponent::AddYawTorque(float Torque)
@@ -144,11 +147,13 @@ void UFluidMotionComponent::IntegrateLinearVelocity(float DeltaTime)
 	}
 
 	LinearVelocity += (PendingForce / GetSafeMass()) * DeltaTime;
+	LinearVelocity = ChemicalBondGameplayPlane::ProjectVector(LinearVelocity);
 	PendingForce = FVector::ZeroVector;
 
 	if (MaxLinearSpeed > 0.f)
 	{
 		LinearVelocity = LinearVelocity.GetClampedToMaxSize(MaxLinearSpeed);
+		LinearVelocity = ChemicalBondGameplayPlane::ProjectVector(LinearVelocity);
 	}
 
 	if (MoveInput.IsNearlyZero() && LinearVelocity.SizeSquared() <= FMath::Square(StopLinearSpeedThreshold))
@@ -195,11 +200,14 @@ void UFluidMotionComponent::MoveOwner(float DeltaTime)
 	}
 
 	FHitResult Hit;
-	Owner->AddActorWorldOffset(LinearVelocity * DeltaTime, true, &Hit);
+	Owner->AddActorWorldOffset(ChemicalBondGameplayPlane::ProjectVector(LinearVelocity) * DeltaTime, true, &Hit);
 	if (Hit.IsValidBlockingHit())
 	{
 		LinearVelocity = FVector::VectorPlaneProject(LinearVelocity, Hit.Normal);
+		LinearVelocity = ChemicalBondGameplayPlane::ProjectVector(LinearVelocity);
 	}
+
+	ConstrainOwnerToGameplayPlane();
 }
 
 void UFluidMotionComponent::RotateOwner(float DeltaTime)
@@ -219,6 +227,23 @@ void UFluidMotionComponent::RotateOwner(float DeltaTime)
 	}
 
 	Owner->AddActorWorldRotation(FRotator(0.f, YawVelocity * DeltaTime, 0.f));
+	ConstrainOwnerToGameplayPlane();
+}
+
+void UFluidMotionComponent::ConstrainOwnerToGameplayPlane() const
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	const FVector CurrentLocation = Owner->GetActorLocation();
+	const FVector PlaneLocation = ChemicalBondGameplayPlane::ProjectLocation(CurrentLocation);
+	if (!CurrentLocation.Equals(PlaneLocation, KINDA_SMALL_NUMBER))
+	{
+		Owner->SetActorLocation(PlaneLocation, false);
+	}
 }
 
 float UFluidMotionComponent::GetSafeMass() const

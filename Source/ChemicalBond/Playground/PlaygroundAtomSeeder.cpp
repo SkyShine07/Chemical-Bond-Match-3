@@ -1,5 +1,6 @@
 #include "PlaygroundAtomSeeder.h"
 
+#include "../AtomTypes.h"
 #include "../Movement/FluidMotionComponent.h"
 #include "PlaygroundAtom.h"
 
@@ -48,7 +49,8 @@ void APlaygroundAtomSeeder::SpawnAtoms()
 	FRandomStream RandomStream(RandomSeed);
 	for (int32 Index = 0; Index < SpawnCount; ++Index)
 	{
-		const FVector SpawnLocation = GetActorLocation() + GetRandomSpawnOffset(RandomStream);
+		const FVector SpawnLocation = ChemicalBondGameplayPlane::ProjectLocation(
+			GetActorLocation() + GetRandomSpawnOffset(RandomStream));
 		const FRotator SpawnRotation(0.f, RandomStream.FRandRange(0.f, 360.f), 0.f);
 		const FTransform SpawnTransform(SpawnRotation, SpawnLocation);
 

@@ -4,6 +4,8 @@
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "../Game/ChemicalBondGameDirector.h"
+#include "../Game/ChemicalBondGameMode.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputCoreTypes.h"
@@ -15,10 +17,10 @@ APlaygroundPlayerPawn::APlaygroundPlayerPawn()
 	PrimaryActorTick.bCanEverTick = true;
 	AutoPossessPlayer = EAutoReceiveInput::Player0;
 
-	CollisionRoot = CreateDefaultSubobject<USphereComponent>(TEXT("CollisionRoot"));
+	CollisionRoot = CreateDefaultSubobject<USphereComponent>(TEXT("PawnCollision"));
 	CollisionRoot->SetSphereRadius(70.f);
 	CollisionRoot->SetCollisionProfileName(TEXT("Pawn"));
-	RootComponent = CollisionRoot;
+	CollisionRoot->SetupAttachment(RootComponent);
 
 	VisualMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("VisualMesh"));
 	VisualMesh->SetupAttachment(RootComponent);
@@ -41,8 +43,6 @@ APlaygroundPlayerPawn::APlaygroundPlayerPawn()
 	ElementLabel->SetWorldSize(110.f);
 	ElementLabel->SetRelativeLocation(FVector(0.f, 0.f, 130.f));
 
-	FluidMotionComponent = CreateDefaultSubobject<UFluidMotionComponent>(TEXT("FluidMotionComponent"));
-
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
 	CameraBoom->SetUsingAbsoluteRotation(true);
@@ -54,13 +54,21 @@ APlaygroundPlayerPawn::APlaygroundPlayerPawn()
 	Camera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 }
 
+void APlaygroundPlayerPawn::PreInitializeComponents()
+{
+	ApplyRuntimeAtomData(EAtomElementType::C_Player, PlayerAtomMass, 4, false);
+	SetInitialAtomState(EAtomState::PlayerConnected);
+	Super::PreInitializeComponents();
+}
+
 void APlaygroundPlayerPawn::BeginPlay()
 {
 	Super::BeginPlay();
+	SetAtomState(EAtomState::PlayerConnected);
 
-	if (FluidMotionComponent)
+	if (UFluidMotionComponent* FluidMotion = GetFluidMotionComponent())
 	{
-		FluidMotionComponent->SetEffectiveMass(PlayerAtomMass);
+		FluidMotion->SetEffectiveMass(PlayerAtomMass);
 	}
 
 	if (VisualMesh)
@@ -80,7 +88,8 @@ void APlaygroundPlayerPawn::Tick(float DeltaSeconds)
 
 void APlaygroundPlayerPawn::PollPlaygroundInput()
 {
-	if (!FluidMotionComponent)
+	UFluidMotionComponent* FluidMotion = GetFluidMotionComponent();
+	if (!FluidMotion)
 	{
 		return;
 	}
@@ -88,9 +97,11 @@ void APlaygroundPlayerPawn::PollPlaygroundInput()
 	const APlayerController* PlayerController = Cast<APlayerController>(GetController());
 	if (!PlayerController)
 	{
-		FluidMotionComponent->ClearMoveInput();
-		FluidMotionComponent->ClearYawInput();
-		FluidMotionComponent->SetSprintActive(false);
+		FluidMotion->ClearMoveInput();
+		FluidMotion->ClearYawInput();
+		FluidMotion->SetSprintActive(false);
+		bWasSpaceDown = false;
+		bWasFDown = false;
 		return;
 	}
 
@@ -114,11 +125,11 @@ void APlaygroundPlayerPawn::PollPlaygroundInput()
 
 	if (MoveDirection.IsNearlyZero())
 	{
-		FluidMotionComponent->ClearMoveInput();
+		FluidMotion->ClearMoveInput();
 	}
 	else
 	{
-		FluidMotionComponent->SetMoveInput(MoveDirection, 1.f);
+		FluidMotion->SetMoveInput(MoveDirection, 1.f);
 	}
 
 	float YawInput = 0.f;
@@ -130,10 +141,40 @@ void APlaygroundPlayerPawn::PollPlaygroundInput()
 	{
 		YawInput -= 1.f;
 	}
-	FluidMotionComponent->SetYawInput(YawInput);
+	FluidMotion->SetYawInput(YawInput);
 
 	const bool bWantsSprint =
 		PlayerController->IsInputKeyDown(EKeys::LeftShift) ||
 		PlayerController->IsInputKeyDown(EKeys::RightShift);
-	FluidMotionComponent->SetSprintActive(bWantsSprint);
+	FluidMotion->SetSprintActive(bWantsSprint);
+
+	PollConnectionDecisionInput(PlayerController);
+}
+
+void APlaygroundPlayerPawn::PollConnectionDecisionInput(const APlayerController* PlayerController)
+{
+	if (!PlayerController)
+	{
+		return;
+	}
+
+	const bool bSpaceDown = PlayerController->IsInputKeyDown(EKeys::SpaceBar);
+	const bool bFDown = PlayerController->IsInputKeyDown(EKeys::F);
+
+	UWorld* World = GetWorld();
+	AChemicalBondGameMode* ChemicalBondGameMode = World ? World->GetAuthGameMode<AChemicalBondGameMode>() : nullptr;
+	AChemicalBondGameDirector* GameDirector = ChemicalBondGameMode ? ChemicalBondGameMode->GetGameDirector() : nullptr;
+
+	if (GameDirector && bSpaceDown && !bWasSpaceDown)
+	{
+		GameDirector->HandleDecisionConfirmInput();
+	}
+
+	if (GameDirector && bFDown && !bWasFDown)
+	{
+		GameDirector->HandleDecisionRejectInput();
+	}
+
+	bWasSpaceDown = bSpaceDown;
+	bWasFDown = bFDown;
 }
