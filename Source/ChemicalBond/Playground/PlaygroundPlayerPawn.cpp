@@ -47,7 +47,7 @@ APlaygroundPlayerPawn::APlaygroundPlayerPawn()
 	CameraBoom->SetupAttachment(RootComponent);
 	CameraBoom->SetUsingAbsoluteRotation(true);
 	CameraBoom->TargetArmLength = 1700.f;
-	CameraBoom->SetWorldRotation(FRotator(-70.f, 0.f, 0.f));
+	CameraBoom->SetWorldRotation(FRotator(-90.f, 0.f, 0.f));
 	CameraBoom->bDoCollisionTest = false;
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));

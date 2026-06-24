@@ -7,6 +7,10 @@
 #include "../AtomBase.h"
 #include "ChemicalBondGameMode.h"
 #include "../Movement/FluidMotionComponent.h"
+#include "AI/NavigationSystemBase.h"
+#include "Camera/CameraComponent.h"
+#include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetMathLibrary.h"
 
 DEFINE_LOG_CATEGORY(LogChemicalBondDirector);
 
@@ -779,6 +783,51 @@ void AChemicalBondGameDirector::MarkAtomAsPlayerConnected(AAtomBase* Atom)
 		TEXT("[Game:Connection] Mark atom group as PlayerConnected. RootAtom=%s AtomUid=%s"),
 		*GetNameSafe(Atom),
 		*Atom->GetAtomUid().ToString());
+}
+
+FVector AChemicalBondGameDirector::GetViewBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime)
+{
+	FVector HalfSize;
+
+	if (Camera)
+	{
+		FMinimalViewInfo ViewInfo;
+		Camera->GetCameraView(DeltaTime,ViewInfo);
+		
+		HalfSize.Y=FMath::Tan(FMath::DegreesToRadians(ViewInfo.FOV/2))*SpringArmLength;
+		HalfSize.X=HalfSize.Y*ViewInfo.AspectRatio;
+		HalfSize.Z=SpringArmLength/2;
+	}
+	
+	return  HalfSize;
+	
+}
+
+TArray<FVector> AChemicalBondGameDirector::SplitBoxRange(FVector BigBoxHalfSize,FVector& SubBoxHalfSize,uint8 SplitNum)
+{
+	TArray<FVector> BoxsCenter;
+
+	// 获得实际范围
+	FVector BigBoxSize=BigBoxHalfSize*2;
+	
+	
+	// 计算8个区域的中心坐标
+	
+	BoxsCenter.Add(FVector(-1*BigBoxSize.X/(SplitNum+1),BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
+	BoxsCenter.Add(FVector(0,BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
+	BoxsCenter.Add(FVector(BigBoxSize.X/(SplitNum+1),BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
+	
+	BoxsCenter.Add(FVector(-1*BigBoxSize.X/(SplitNum+1),0,BigBoxSize.Z));
+	BoxsCenter.Add(FVector(BigBoxSize.X/(SplitNum+1),0,BigBoxSize.Z));
+	
+	BoxsCenter.Add(FVector(-1*BigBoxSize.X/(SplitNum+1),-1*BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
+	BoxsCenter.Add(FVector(0,BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
+	BoxsCenter.Add(FVector(BigBoxSize.X/(SplitNum+1),-1*BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
+	
+	//计算子区域的大小范围
+	SubBoxHalfSize=BigBoxSize/(SplitNum+1);
+	
+	return BoxsCenter;
 }
 
 void AChemicalBondGameDirector::BindAtomConnectionEvents(AAtomBase* Atom)

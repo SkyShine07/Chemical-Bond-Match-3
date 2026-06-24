@@ -43,4 +43,6 @@ private:
 	// 运行时状态
 	UPROPERTY(Transient)
 	TObjectPtr<AChemicalBondGameDirector> GameDirector = nullptr;
+	
+	
 };
