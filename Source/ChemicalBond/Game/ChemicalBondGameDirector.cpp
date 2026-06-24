@@ -825,8 +825,35 @@ TArray<FVector> AChemicalBondGameDirector::GetGridCenters(const FVector Center, 
 		}
 	}
 	
-
+	Centers.RemoveAt(4);
 	return Centers;
+}
+
+void AChemicalBondGameDirector::RefreshAllRegionGuide( TArray<FVector> SubBoxsCenter, FVector& MainGuide,
+	TArray<FVector>& SubGuide, TArray<FVector>& WeakGuide, TArray<FVector>& NoneGuide)
+{
+	if (SubBoxsCenter.IsEmpty()) return ;
+	
+	MainGuide=SubBoxsCenter[FMath::RandRange(0,SubBoxsCenter.Num()-1)];
+	SubBoxsCenter.Remove(MainGuide);
+	
+	SubBoxsCenter.Sort([&](const FVector& A, const FVector& B)
+	{
+		return (A-MainGuide).Size()<(B-MainGuide).Size();
+	});
+	
+	SubGuide.Add(SubBoxsCenter[0]);
+	SubGuide.Add(SubBoxsCenter[1]);
+	
+	WeakGuide.Add(SubBoxsCenter[2]);
+	WeakGuide.Add(SubBoxsCenter[3]);
+	
+	NoneGuide.Add(SubBoxsCenter[4]);
+	NoneGuide.Add(SubBoxsCenter[5]);
+	NoneGuide.Add(SubBoxsCenter[6]);
+	
+	
+	
 }
 
 
