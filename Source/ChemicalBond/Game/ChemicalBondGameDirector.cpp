@@ -803,32 +803,32 @@ FVector AChemicalBondGameDirector::GetViewBoxRange(UCameraComponent* Camera,floa
 	
 }
 
-TArray<FVector> AChemicalBondGameDirector::SplitBoxRange(FVector BigBoxHalfSize,FVector& SubBoxHalfSize,uint8 SplitNum)
+TArray<FVector> AChemicalBondGameDirector::GetGridCenters(const FVector Center, const FVector Extent,FVector& SubBoxExtent)
 {
-	TArray<FVector> BoxsCenter;
+	
+	 SubBoxExtent=Extent/3;
+	
+	TArray<FVector> Centers;
+	FVector Min = Center - Extent;
+	FVector Max = Center + Extent;
+	float StepX = (Max.X - Min.X) / 3.0f;
+	float StepY = (Max.Y - Min.Y) / 3.0f;
+	float FixedZ = Center.Z; 
 
-	// 获得实际范围
-	FVector BigBoxSize=BigBoxHalfSize*2;
+	for (int32 i = 0; i < 3; i++)
+	{
+		for (int32 j = 0; j < 3; j++)
+		{
+			float X = Min.X + StepX * (i + 0.5f);
+			float Y = Min.Y + StepY * (j + 0.5f);
+			Centers.Add(FVector(X, Y, FixedZ));
+		}
+	}
 	
-	
-	// 计算8个区域的中心坐标
-	
-	BoxsCenter.Add(FVector(-1*BigBoxSize.X/(SplitNum+1),BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
-	BoxsCenter.Add(FVector(0,BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
-	BoxsCenter.Add(FVector(BigBoxSize.X/(SplitNum+1),BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
-	
-	BoxsCenter.Add(FVector(-1*BigBoxSize.X/(SplitNum+1),0,BigBoxSize.Z));
-	BoxsCenter.Add(FVector(BigBoxSize.X/(SplitNum+1),0,BigBoxSize.Z));
-	
-	BoxsCenter.Add(FVector(-1*BigBoxSize.X/(SplitNum+1),-1*BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
-	BoxsCenter.Add(FVector(0,BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
-	BoxsCenter.Add(FVector(BigBoxSize.X/(SplitNum+1),-1*BigBoxSize.Y/(SplitNum+1),BigBoxSize.Z));
-	
-	//计算子区域的大小范围
-	SubBoxHalfSize=BigBoxSize/(SplitNum+1);
-	
-	return BoxsCenter;
+
+	return Centers;
 }
+
 
 void AChemicalBondGameDirector::BindAtomConnectionEvents(AAtomBase* Atom)
 {
