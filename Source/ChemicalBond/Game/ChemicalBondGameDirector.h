@@ -7,6 +7,7 @@
 #include "../AtomTypes.h"
 #include "ChemicalBondGameDirector.generated.h"
 
+class UCameraComponent;
 class AAtomBase;
 class AChemicalBondGameMode;
 
@@ -172,7 +173,16 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="ChemicalBond|Connection")
 	void MarkAtomAsPlayerConnected(AAtomBase* Atom);
-
+	
+	// 计算8个刷新区域
+	
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	static FVector GetViewBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	static TArray<FVector> SplitBoxRange(FVector BigBoxHalfSize,FVector& SubBoxHalfSize,uint8 SplitNum=2);
+	
+	
 	bool ValidateBondRegistryConsistency(FString& OutError) const;
 	void AssertBondRegistryConsistency();
 
