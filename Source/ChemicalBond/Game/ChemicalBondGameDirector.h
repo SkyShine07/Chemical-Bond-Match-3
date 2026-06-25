@@ -189,13 +189,22 @@ public:
 	
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
 	static FVector GetViewBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	FVector GetLogicRegionBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	FVector GetAtomLifeRegionBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
 	
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
 	static TArray<FVector> GetGridCenters(const FVector Center, const FVector Extent,FVector& SubBoxExtent);
+
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	FVector GetFirstRefreshMainGuideRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime,FVector& Extent);
 	
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static void  RefreshAllRegionGuide( TArray<FVector> SubBoxsCenter, FVector& MainGuide,
-												TArray<FVector>& SubGuide,TArray<FVector>& WeakGuide,TArray<FVector>&  NoneGuide);
+	static void GetAllOtherRegionGuides(TArray<FVector> SubBoxsCenter, const FVector& MainGuide,
+		TArray<FVector>& SubGuide,TArray<FVector>& WeakGuide,TArray<FVector>& NoneGuide);
 	
 	
 	bool ValidateBondRegistryConsistency(FString& OutError) const;
@@ -286,10 +295,34 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UNiagaraComponent> ActiveDecisionWarningComponent = nullptr;
 
+	UPROPERTY(Transient)
+	float LastDecisionWarningLogTime = -1000.f;
+
+	UPROPERTY(Transient)
+	bool bDecisionWarningVisualConfigured = false;
+
+	UPROPERTY(Transient)
+	bool bLoggedDecisionWarningParameters = false;
+
 	// 蓝图配置：Class=GameDirector 派生类，Range=NiagaraSystem 资源，
 	// Effect=玩家基团参与待决策时，在已连接原子中心生成的倒计时警示特效。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UNiagaraSystem> DecisionWarningVisualSystem = nullptr;
+
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.01..10.0，
+	// Effect=把已连接原子的交互半径换算成写入 NS_Warning 的 User.Radiu 数值；默认 2.0 表示按直径传入。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
+	float DecisionWarningRadiusParameterScale = 2.f;
+
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.01..10.0，
+	// Effect=把可视范围换算为逻辑执行范围的倍率。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
+	float LogicRegionBoxScale = 1.2f;
+
+	// 蓝图配置：Class=GameDirector 派生类，Range=0.01..10.0，
+	// Effect=把可视范围换算为原子生存范围的倍率。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
+	float AtomLifeRegionBoxScale = 2.f;
 
 	FGuid GenerateUniqueAtomUid() const;
 	FGuid GenerateUniqueBondUid() const;
@@ -327,6 +360,9 @@ private:
 	void SpawnOrUpdateBondVisual(FGuid BondUid);
 	void UpdateAllBondVisuals();
 	void DestroyBondVisual(FGuid BondUid);
+	void ConfigureDecisionWarningVisualSystem();
+	void LogDecisionWarningVisualParametersOnce();
+	void SetDecisionWarningVisualParameters(float WarningLifetime, float WarningRadius);
 	void SpawnOrUpdateActiveDecisionWarningVisual();
 	void DestroyActiveDecisionWarningVisual();
 	void SettleConnectionCandidate(const FAtomConnectionCandidate& Candidate);
