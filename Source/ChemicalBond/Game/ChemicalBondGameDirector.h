@@ -187,15 +187,31 @@ public:
 	
 	// 计算8个刷新区域
 	
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static FVector GetViewBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
 	
+	// 获得视口范围
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	 FVector GetViewBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	
+	// 获得逻辑区域范围
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	 FVector GetLogicRegionBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	
+	// 获得生存区域范围
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	FVector GetAtomLifeRegionBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	
+	//将Box区域拆分为8个区域（去掉中心区域）
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
 	static TArray<FVector> GetGridCenters(const FVector Center, const FVector Extent,FVector& SubBoxExtent);
 	
+	// 获得第一次刷新的主区域（随机）
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static void  RefreshAllRegionGuide( TArray<FVector> SubBoxsCenter, FVector& MainGuide,
-												TArray<FVector>& SubGuide,TArray<FVector>& WeakGuide,TArray<FVector>&  NoneGuide);
+	FVector GetFirstRefreshMainGuideRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime,FVector& Extent);
+	
+	// 在除了主引导区域的其余7个区域中划分：次，弱，无相关三类引导区域(计算与主引导区的距离划分)
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	static void  GetAllOtherRegionGuides( TArray<FVector> SubBoxsCenter, const FVector& MainGuide,
+												TArray<FVector>& SubGuide,TArray<FVector>& WeakGuide,TArray<FVector>& NoneGuide);
 	
 	
 	bool ValidateBondRegistryConsistency(FString& OutError) const;
@@ -291,6 +307,18 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UNiagaraSystem> DecisionWarningVisualSystem = nullptr;
 
+	
+	
+	// 蓝图配置：Class=GameDirector 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	float LogicRegionBoxScale=1.2;
+	
+	// 蓝图配置：Class=GameDirector 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	float AtomLifeRegionBoxScale=2;
+	
+	
+	
 	FGuid GenerateUniqueAtomUid() const;
 	FGuid GenerateUniqueBondUid() const;
 	void RegisterExistingAtomsInWorld();

@@ -878,12 +878,44 @@ FVector AChemicalBondGameDirector::GetViewBoxRange(UCameraComponent* Camera,floa
 	
 }
 
+FVector AChemicalBondGameDirector::GetLogicRegionBoxRange(UCameraComponent* Camera, float SpringArmLength,
+	float DeltaTime)
+{
+	FVector BoxExtent=FVector::Zero();
+	if (Camera)
+	{
+		FVector ViewBoxExtent=GetViewBoxRange(Camera,SpringArmLength,DeltaTime);
+		BoxExtent.X=ViewBoxExtent.X*LogicRegionBoxScale;
+		BoxExtent.Y=ViewBoxExtent.Y*LogicRegionBoxScale;
+		BoxExtent.Z=ViewBoxExtent.Z;
+	}
+	
+		return BoxExtent;
+	
+}
+
+FVector AChemicalBondGameDirector::GetAtomLifeRegionBoxRange(UCameraComponent* Camera, float SpringArmLength,
+	float DeltaTime)
+{
+	FVector BoxExtent=FVector::Zero();
+	if (Camera)
+	{
+		FVector ViewBoxExtent=GetViewBoxRange(Camera,SpringArmLength,DeltaTime);
+		BoxExtent.X=ViewBoxExtent.X*AtomLifeRegionBoxScale;
+		BoxExtent.Y=ViewBoxExtent.Y*AtomLifeRegionBoxScale;
+		BoxExtent.Z=ViewBoxExtent.Z;
+	}
+	
+	return BoxExtent;
+	
+}
+
 TArray<FVector> AChemicalBondGameDirector::GetGridCenters(const FVector Center, const FVector Extent,FVector& SubBoxExtent)
 {
 	
 	 SubBoxExtent=Extent/3;
 	
-	TArray<FVector> Centers;
+	TArray<FVector> SubBoxCenters;
 	FVector Min = Center - Extent;
 	FVector Max = Center + Extent;
 	float StepX = (Max.X - Min.X) / 3.0f;
@@ -896,20 +928,45 @@ TArray<FVector> AChemicalBondGameDirector::GetGridCenters(const FVector Center, 
 		{
 			float X = Min.X + StepX * (i + 0.5f);
 			float Y = Min.Y + StepY * (j + 0.5f);
-			Centers.Add(FVector(X, Y, FixedZ));
+			SubBoxCenters.Add(FVector(X, Y, FixedZ));
 		}
 	}
 	
-	Centers.RemoveAt(4);
-	return Centers;
+	//SubBoxCenters.Remove(Center);
+	SubBoxCenters.RemoveAt(4);
+	
+	return SubBoxCenters;
+	
 }
 
-void AChemicalBondGameDirector::RefreshAllRegionGuide( TArray<FVector> SubBoxsCenter, FVector& MainGuide,
-	TArray<FVector>& SubGuide, TArray<FVector>& WeakGuide, TArray<FVector>& NoneGuide)
+FVector AChemicalBondGameDirector::GetFirstRefreshMainGuideRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime,FVector& Extent)
+{
+	FVector MainGuideRegionCenter=FVector::Zero();
+	
+	if (Camera)
+	{
+		FVector LogicRegionBoxRange=GetLogicRegionBoxRange(Camera,SpringArmLength,DeltaTime);
+		FVector LogicRegionBoxCenter=Camera->GetOwner()->GetActorLocation();
+		FVector SubBoxExtent=FVector::Zero();
+		TArray<FVector> GridCenters=GetGridCenters(LogicRegionBoxCenter,LogicRegionBoxRange,SubBoxExtent);
+		
+		Extent=SubBoxExtent;
+		
+		// 获得索引值在（0-7）范围中的随机元素
+		MainGuideRegionCenter=GridCenters[FMath::RandRange(0,GridCenters.Num()-1)];
+		
+	}
+	
+	
+	return MainGuideRegionCenter;
+	
+}
+
+void AChemicalBondGameDirector::GetAllOtherRegionGuides( TArray<FVector> SubBoxsCenter, const FVector& MainGuide,
+                                                       TArray<FVector>& SubGuide, TArray<FVector>& WeakGuide, TArray<FVector>& NoneGuide)
 {
 	if (SubBoxsCenter.IsEmpty()) return ;
 	
-	MainGuide=SubBoxsCenter[FMath::RandRange(0,SubBoxsCenter.Num()-1)];
 	SubBoxsCenter.Remove(MainGuide);
 	
 	SubBoxsCenter.Sort([&](const FVector& A, const FVector& B)
@@ -917,12 +974,15 @@ void AChemicalBondGameDirector::RefreshAllRegionGuide( TArray<FVector> SubBoxsCe
 		return (A-MainGuide).Size()<(B-MainGuide).Size();
 	});
 	
+	// 次区域
 	SubGuide.Add(SubBoxsCenter[0]);
 	SubGuide.Add(SubBoxsCenter[1]);
 	
+	// 弱区域
 	WeakGuide.Add(SubBoxsCenter[2]);
 	WeakGuide.Add(SubBoxsCenter[3]);
 	
+	// 无相关区域
 	NoneGuide.Add(SubBoxsCenter[4]);
 	NoneGuide.Add(SubBoxsCenter[5]);
 	NoneGuide.Add(SubBoxsCenter[6]);
