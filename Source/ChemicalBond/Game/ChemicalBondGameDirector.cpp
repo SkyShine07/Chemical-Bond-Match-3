@@ -12,8 +12,11 @@
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "NiagaraComponent.h"
+#include "NiagaraEmitter.h"
+#include "NiagaraEmitterHandle.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
+#include "NiagaraUserRedirectionParameterStore.h"
 #include "Components/SceneComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -1699,6 +1702,78 @@ void AChemicalBondGameDirector::DestroyBondVisual(FGuid BondUid)
 	}
 }
 
+void AChemicalBondGameDirector::ConfigureDecisionWarningVisualSystem()
+{
+	if (bDecisionWarningVisualConfigured)
+	{
+		return;
+	}
+	if (!DecisionWarningVisualSystem)
+	{
+		return;
+	}
+
+	bDecisionWarningVisualConfigured = true;
+	for (FNiagaraEmitterHandle& EmitterHandle : DecisionWarningVisualSystem->GetEmitterHandles())
+	{
+		FVersionedNiagaraEmitterData* EmitterData = EmitterHandle.GetEmitterData();
+		if (!EmitterData)
+		{
+			continue;
+		}
+
+		if (!EmitterData->bLocalSpace)
+		{
+			EmitterData->bLocalSpace = true;
+			UE_LOG(LogChemicalBondDirector, Log,
+				TEXT("[Game:Connection] Decision warning emitter forced to local space. System=%s Emitter=%s"),
+				*GetNameSafe(DecisionWarningVisualSystem),
+				*EmitterHandle.GetName().ToString());
+		}
+	}
+}
+
+void AChemicalBondGameDirector::LogDecisionWarningVisualParametersOnce()
+{
+	if (bLoggedDecisionWarningParameters)
+	{
+		return;
+	}
+	if (!DecisionWarningVisualSystem)
+	{
+		return;
+	}
+
+	bLoggedDecisionWarningParameters = true;
+	TArray<FNiagaraVariable> UserParameters;
+	DecisionWarningVisualSystem->GetExposedParameters().GetUserParameters(UserParameters);
+	for (const FNiagaraVariable& UserParameter : UserParameters)
+	{
+		UE_LOG(LogChemicalBondDirector, Log,
+			TEXT("[Game:Connection] Decision warning Niagara user parameter. Name=%s Type=%s"),
+			*UserParameter.GetName().ToString(),
+			*UserParameter.GetType().GetNameText().ToString());
+	}
+}
+
+void AChemicalBondGameDirector::SetDecisionWarningVisualParameters(float WarningLifetime, float WarningRadius)
+{
+	if (!ActiveDecisionWarningComponent)
+	{
+		return;
+	}
+
+	const float WarningVisualRadius = FMath::Max(WarningRadius * DecisionWarningRadiusParameterScale, 0.f);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("lifetime")), WarningLifetime);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("radiu")), WarningVisualRadius);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("Lifetime")), WarningLifetime);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("Radiu")), WarningVisualRadius);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("User.lifetime")), WarningLifetime);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("User.radiu")), WarningVisualRadius);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("User.Lifetime")), WarningLifetime);
+	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("User.Radiu")), WarningVisualRadius);
+}
+
 void AChemicalBondGameDirector::SpawnOrUpdateActiveDecisionWarningVisual()
 {
 	if (!bHasActiveDecisionRequest)
@@ -1728,6 +1803,9 @@ void AChemicalBondGameDirector::SpawnOrUpdateActiveDecisionWarningVisual()
 	{
 		return;
 	}
+
+	ConfigureDecisionWarningVisualSystem();
+	LogDecisionWarningVisualParametersOnce();
 
 	const FVector WarningLocation = ChemicalBondGameplayPlane::ProjectLocation(ConnectedAtom->GetActorLocation());
 	const float WarningLifetime = FMath::Max(ActiveDecisionRequest.RemainingDecisionSeconds, 0.f);
@@ -1761,15 +1839,31 @@ void AChemicalBondGameDirector::SpawnOrUpdateActiveDecisionWarningVisual()
 	ActiveDecisionWarningComponent->SetWorldLocation(WarningLocation);
 	ActiveDecisionWarningComponent->SetWorldRotation(FRotator::ZeroRotator);
 	ActiveDecisionWarningComponent->SetWorldScale3D(FVector::OneVector);
-	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("lifetime")), WarningLifetime);
-	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("radiu")), WarningRadius);
-	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("User.lifetime")), WarningLifetime);
-	ActiveDecisionWarningComponent->SetVariableFloat(FName(TEXT("User.radiu")), WarningRadius);
-	ActiveDecisionWarningComponent->SetNiagaraVariableFloat(TEXT("User.lifetime"), WarningLifetime);
-	ActiveDecisionWarningComponent->SetNiagaraVariableFloat(TEXT("User.radiu"), WarningRadius);
-	if (bCreatedWarningComponent || !ActiveDecisionWarningComponent->IsActive())
+	SetDecisionWarningVisualParameters(WarningLifetime, WarningRadius);
+	if (bCreatedWarningComponent)
 	{
 		ActiveDecisionWarningComponent->Activate(true);
+	}
+	else if (!ActiveDecisionWarningComponent->IsActive())
+	{
+		ActiveDecisionWarningComponent->Activate(true);
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		const float CurrentTime = World->GetTimeSeconds();
+		if (CurrentTime - LastDecisionWarningLogTime >= 1.f)
+		{
+			LastDecisionWarningLogTime = CurrentTime;
+			UE_LOG(LogChemicalBondDirector, Log,
+				TEXT("[Game:Connection] Decision warning visual update. ConnectedAtom=%s Location=%s Radius=%.2f VisualRadius=%.2f Lifetime=%.2f ComponentLocation=%s"),
+				*GetNameSafe(ConnectedAtom),
+				*WarningLocation.ToString(),
+				WarningRadius,
+				FMath::Max(WarningRadius * DecisionWarningRadiusParameterScale, 0.f),
+				WarningLifetime,
+				*ActiveDecisionWarningComponent->GetComponentLocation().ToString());
+		}
 	}
 }
 
@@ -1783,6 +1877,7 @@ void AChemicalBondGameDirector::DestroyActiveDecisionWarningVisual()
 	ActiveDecisionWarningComponent->Deactivate();
 	ActiveDecisionWarningComponent->DestroyComponent();
 	ActiveDecisionWarningComponent = nullptr;
+	LastDecisionWarningLogTime = -1000.f;
 }
 
 void AChemicalBondGameDirector::SettleConnectionCandidate(const FAtomConnectionCandidate& Candidate)
