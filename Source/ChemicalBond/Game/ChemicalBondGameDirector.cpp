@@ -877,7 +877,7 @@ FVector AChemicalBondGameDirector::GetViewBoxRange(UCameraComponent* Camera,floa
 		HalfSize.Z=SpringArmLength/2;
 	}
 	
-	return  HalfSize;
+	return  HalfSize*2;
 	
 }
 
@@ -910,6 +910,132 @@ FVector AChemicalBondGameDirector::GetAtomLifeRegionBoxRange(UCameraComponent* C
 	}
 	
 	return BoxExtent;
+	
+}
+
+
+TArray<FRefreshRegionInfo> AChemicalBondGameDirector::GetAllGridRegions(UCameraComponent* Camera, float SpringArmLength,
+	float DeltaTime)
+{
+	TArray<FRefreshRegionInfo> RegionInfos;
+	if (Camera)
+	{
+		FVector AtomLifeRegionBoxRange=GetAtomLifeRegionBoxRange(Camera,SpringArmLength,DeltaTime);
+		RegionInfos=Get_8_Regions(AtomLifeRegionBoxRange);
+	}
+	return RegionInfos;
+}
+
+TArray<FRefreshRegionInfo> AChemicalBondGameDirector::Get_8_Regions(FVector Range)
+{
+		TArray<FRefreshRegionInfo> RegionInfos;
+		FVector AtomLifeRegionBoxRange=Range;
+	
+		FRefreshRegionInfo RefreshRegionInfo_0;
+		RefreshRegionInfo_0.MinRange=FVector(AtomLifeRegionBoxRange.X*-0.5,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_0.MaxRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*0.5,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_0.CentrallySymmetricRegionIndex=7;
+		RefreshRegionInfo_0.SubGuideRegionIndex.Add(1);
+		RefreshRegionInfo_0.SubGuideRegionIndex.Add(3);
+		RefreshRegionInfo_0.WeakGuideRegionIndex.Add(2);
+		RefreshRegionInfo_0.WeakGuideRegionIndex.Add(5);
+		RefreshRegionInfo_0.NonGuideRegionIndex.Add(4);
+		RefreshRegionInfo_0.NonGuideRegionIndex.Add(6);
+		RefreshRegionInfo_0.NonGuideRegionIndex.Add(7);
+		RegionInfos.Add(RefreshRegionInfo_0);
+		
+		FRefreshRegionInfo RefreshRegionInfo_1;
+		RefreshRegionInfo_1.MinRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_1.MaxRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*0.5,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_1.CentrallySymmetricRegionIndex=6;
+		RefreshRegionInfo_1.SubGuideRegionIndex.Add(0);
+		RefreshRegionInfo_1.SubGuideRegionIndex.Add(2);
+		RefreshRegionInfo_1.WeakGuideRegionIndex.Add(3);
+		RefreshRegionInfo_1.WeakGuideRegionIndex.Add(4);
+		RefreshRegionInfo_1.NonGuideRegionIndex.Add(5);
+		RefreshRegionInfo_1.NonGuideRegionIndex.Add(6);
+		RefreshRegionInfo_1.NonGuideRegionIndex.Add(7);
+		RegionInfos.Add(RefreshRegionInfo_1);
+		
+		FRefreshRegionInfo RefreshRegionInfo_2;
+		RefreshRegionInfo_2.MinRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_2.MaxRange=FVector(AtomLifeRegionBoxRange.X*0.5,AtomLifeRegionBoxRange.Y*0.5,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_2.CentrallySymmetricRegionIndex=5;
+		RefreshRegionInfo_2.SubGuideRegionIndex.Add(1);
+		RefreshRegionInfo_2.SubGuideRegionIndex.Add(4);
+		RefreshRegionInfo_2.WeakGuideRegionIndex.Add(0);
+		RefreshRegionInfo_2.WeakGuideRegionIndex.Add(7);
+		RefreshRegionInfo_2.NonGuideRegionIndex.Add(5);
+		RefreshRegionInfo_2.NonGuideRegionIndex.Add(6);
+		RefreshRegionInfo_2.NonGuideRegionIndex.Add(3);
+		RegionInfos.Add(RefreshRegionInfo_2);
+		
+		FRefreshRegionInfo RefreshRegionInfo_3;
+		RefreshRegionInfo_3.MinRange=FVector(AtomLifeRegionBoxRange.X*-0.5,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_3.MaxRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_3.CentrallySymmetricRegionIndex=4;
+		RefreshRegionInfo_3.SubGuideRegionIndex.Add(0);
+		RefreshRegionInfo_3.SubGuideRegionIndex.Add(5);
+		RefreshRegionInfo_3.WeakGuideRegionIndex.Add(6);
+		RefreshRegionInfo_3.WeakGuideRegionIndex.Add(1);
+		RefreshRegionInfo_3.NonGuideRegionIndex.Add(2);
+		RefreshRegionInfo_3.NonGuideRegionIndex.Add(4);
+		RefreshRegionInfo_3.NonGuideRegionIndex.Add(7);
+		RegionInfos.Add(RefreshRegionInfo_3);
+		
+		FRefreshRegionInfo RefreshRegionInfo_4;
+		RefreshRegionInfo_4.MinRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_4.MaxRange=FVector(AtomLifeRegionBoxRange.X*0.5,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_4.CentrallySymmetricRegionIndex=3;
+		RefreshRegionInfo_4.SubGuideRegionIndex.Add(2);
+		RefreshRegionInfo_4.SubGuideRegionIndex.Add(7);
+		RefreshRegionInfo_4.WeakGuideRegionIndex.Add(6);
+		RefreshRegionInfo_4.WeakGuideRegionIndex.Add(1);
+		RefreshRegionInfo_4.NonGuideRegionIndex.Add(0);
+		RefreshRegionInfo_4.NonGuideRegionIndex.Add(3);
+		RefreshRegionInfo_4.NonGuideRegionIndex.Add(5);
+		RegionInfos.Add(RefreshRegionInfo_4);
+		
+		FRefreshRegionInfo RefreshRegionInfo_5;
+		RefreshRegionInfo_5.MinRange=FVector(AtomLifeRegionBoxRange.X*-0.5,AtomLifeRegionBoxRange.Y*-0.5,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_5.MaxRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_5.CentrallySymmetricRegionIndex=2;
+		RefreshRegionInfo_5.SubGuideRegionIndex.Add(3);
+		RefreshRegionInfo_5.SubGuideRegionIndex.Add(6);
+		RefreshRegionInfo_5.WeakGuideRegionIndex.Add(0);
+		RefreshRegionInfo_5.WeakGuideRegionIndex.Add(7);
+		RefreshRegionInfo_5.NonGuideRegionIndex.Add(1);
+		RefreshRegionInfo_5.NonGuideRegionIndex.Add(2);
+		RefreshRegionInfo_5.NonGuideRegionIndex.Add(4);
+		RegionInfos.Add(RefreshRegionInfo_5);
+		
+		FRefreshRegionInfo RefreshRegionInfo_6;
+		RefreshRegionInfo_6.MinRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*-0.5,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_6.MaxRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_6.CentrallySymmetricRegionIndex=1;
+		RefreshRegionInfo_6.SubGuideRegionIndex.Add(5);
+		RefreshRegionInfo_6.SubGuideRegionIndex.Add(7);
+		RefreshRegionInfo_6.WeakGuideRegionIndex.Add(3);
+		RefreshRegionInfo_6.WeakGuideRegionIndex.Add(4);
+		RefreshRegionInfo_6.NonGuideRegionIndex.Add(1);
+		RefreshRegionInfo_6.NonGuideRegionIndex.Add(2);
+		RefreshRegionInfo_6.NonGuideRegionIndex.Add(0);
+		RegionInfos.Add(RefreshRegionInfo_6);
+		
+		FRefreshRegionInfo RefreshRegionInfo_7;
+		RefreshRegionInfo_7.MinRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*-0.5,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_7.MaxRange=FVector(AtomLifeRegionBoxRange.X*0.5,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
+		RefreshRegionInfo_7.CentrallySymmetricRegionIndex=0;
+		RefreshRegionInfo_7.SubGuideRegionIndex.Add(4);
+		RefreshRegionInfo_7.SubGuideRegionIndex.Add(6);
+		RefreshRegionInfo_7.WeakGuideRegionIndex.Add(2);
+		RefreshRegionInfo_7.WeakGuideRegionIndex.Add(5);
+		RefreshRegionInfo_7.NonGuideRegionIndex.Add(1);
+		RefreshRegionInfo_7.NonGuideRegionIndex.Add(3);
+		RefreshRegionInfo_7.NonGuideRegionIndex.Add(0);
+		RegionInfos.Add(RefreshRegionInfo_7);
+		
+	return RegionInfos;
 	
 }
 

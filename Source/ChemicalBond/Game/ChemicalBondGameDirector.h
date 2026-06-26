@@ -105,6 +105,34 @@ struct FBondVisualComponentList
 	TArray<TObjectPtr<UNiagaraComponent>> Components;
 };
 
+USTRUCT(BlueprintType)
+struct FRefreshRegionInfo
+{
+	GENERATED_BODY()
+
+	// 区域范围
+	UPROPERTY(BlueprintReadOnly)
+	FVector MinRange;
+	
+	UPROPERTY(BlueprintReadOnly)
+	FVector MaxRange;
+	
+	// 相关区域
+	UPROPERTY(BlueprintReadOnly)
+	TArray<uint8> SubGuideRegionIndex;
+	
+	UPROPERTY(BlueprintReadOnly)
+	TArray<uint8> WeakGuideRegionIndex;
+	
+	UPROPERTY(BlueprintReadOnly)
+	TArray<uint8> NonGuideRegionIndex;
+	
+	UPROPERTY(BlueprintReadOnly)
+	uint8 CentrallySymmetricRegionIndex;
+	
+};
+
+
 // 单局规则编排入口，负责局内系统生命周期、原子/化学键注册表、连接决策队列和临时基团物理连接。
 // 后续分子图、危害、胜负和正式物理约束在设计确认后继续接入。
 UCLASS(Blueprintable)
@@ -196,9 +224,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
 	FVector GetAtomLifeRegionBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
 	
+	
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	TArray<FRefreshRegionInfo> GetAllGridRegions(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	
+	// 生成8个区域信息
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	static TArray<FRefreshRegionInfo> Get_8_Regions(FVector Range);
+	
+	//将生存区域拆分为8个区域（去掉中心区域）
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
 	static TArray<FVector> GetGridCenters(const FVector Center, const FVector Extent,FVector& SubBoxExtent);
-
+	
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
 	FVector GetFirstRefreshMainGuideRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime,FVector& Extent);
 	
