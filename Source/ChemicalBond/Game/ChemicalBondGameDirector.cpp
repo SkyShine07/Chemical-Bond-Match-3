@@ -17,6 +17,7 @@
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "NiagaraUserRedirectionParameterStore.h"
+#include "ChemicalBond/Playground/PlaygroundAtom.h"
 #include "Components/SceneComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -928,12 +929,12 @@ TArray<FRefreshRegionInfo> AChemicalBondGameDirector::GetAllGridRegionsInfoAtAto
 	return RegionInfos;
 }
 
-uint8 AChemicalBondGameDirector::GetNextMainGuideRegionIndex(const TArray<FRefreshRegionInfo>& RefreshRegionInfos,uint8 LocalCurrentMainGuideIndex)
+int32 AChemicalBondGameDirector::GetNextMainGuideRegionIndex(const TArray<FRefreshRegionInfo>& LocalRefreshRegionInfos,uint8 LocalCurrentMainGuideIndex)
 {
-	if (RefreshRegionInfos.IsValidIndex(LocalCurrentMainGuideIndex))
+	if (LocalRefreshRegionInfos.IsValidIndex(LocalCurrentMainGuideIndex))
 	{
-		FRefreshRegionInfo MainRegionInfo= RefreshRegionInfos[LocalCurrentMainGuideIndex];
-		FRefreshRegionInfo CentrallySymmetricRegionInfo=RefreshRegionInfos[MainRegionInfo.CentrallySymmetricRegionIndex];
+		FRefreshRegionInfo MainRegionInfo= LocalRefreshRegionInfos[LocalCurrentMainGuideIndex];
+		FRefreshRegionInfo CentrallySymmetricRegionInfo=LocalRefreshRegionInfos[MainRegionInfo.CentrallySymmetricRegionIndex];
 		
 		TArray<AActor*> AllAtoms;
 		UGameplayStatics::GetAllActorsOfClass(this,AAtomBase::StaticClass(),AllAtoms);
@@ -990,21 +991,75 @@ uint8 AChemicalBondGameDirector::GetNextMainGuideRegionIndex(const TArray<FRefre
 	return -1;
 }
 
-void AChemicalBondGameDirector::RefreshRegions(bool bIsRandom, UCameraComponent* Camera, 
-	float SpringArmLength, 
-	float DeltaTime)
+FRefreshRegionInfo AChemicalBondGameDirector::GetCurrentMainGuideRegionInfo()
 {
+	FRefreshRegionInfo CurrentMainGuideRegionInfo{};
+	
+	if (CurrentMainGuideIndex>=0)
+	{
+		CurrentMainGuideRegionInfo=RefreshRegionInfos[CurrentMainGuideIndex];
+	
+	}
+	
+	return CurrentMainGuideRegionInfo;
+	
+}
+
+void AChemicalBondGameDirector::RefreshRegions(bool bIsRandom, UCameraComponent* Camera, 
+                                               float SpringArmLength, 
+                                               float DeltaTime)
+{
+	RefreshRegionInfos=GetAllGridRegionsInfoAtAtomLifeRegion(Camera,SpringArmLength,DeltaTime);
+	
 	if (bIsRandom)
 	{
 		// 游戏开始时随机选择一个引导区作为主引导区域
 		CurrentMainGuideIndex=FMath::RandRange(0,7);
 	}
+
+	else
+	{
+		CurrentMainGuideIndex=GetNextMainGuideRegionIndex(RefreshRegionInfos,CurrentMainGuideIndex);
+	}
 	
-	TArray<FRefreshRegionInfo> RegionInfos=GetAllGridRegionsInfoAtAtomLifeRegion(Camera,SpringArmLength,DeltaTime);
-	CurrentMainGuideIndex=GetNextMainGuideRegionIndex(RegionInfos,CurrentMainGuideIndex);
+
+	if (CurrentMainGuideIndex>=0)
+	{
+		OnRegionRefreshed.Broadcast(RefreshRegionInfos[CurrentMainGuideIndex]);
+		SpawnAtomInAllRegions();
+	
+	}
 	
 }
 
+void AChemicalBondGameDirector::StartRefreshRegion(UCameraComponent* Camera, float SpringArmLength, float DeltaTime)
+{
+	static  uint8 ExcuteIndex=1;
+	if (ExcuteIndex==1)
+	{
+		RefreshRegions(true,Camera,SpringArmLength,DeltaTime);
+	}
+	
+	
+	UWorld* World=GetWorld();
+	if (!World) return;
+	
+	FTimerHandle InOutHandle;
+	float Rate=FMath::RandRange(Tmin,Tmax);
+	
+	World->GetTimerManager().SetTimer(InOutHandle,[&]()
+	{
+		// 递归调用刷新区域函数
+		RefreshRegions(false,Camera,SpringArmLength,DeltaTime);
+		StartRefreshRegion(Camera,SpringArmLength,DeltaTime);
+		
+		World->GetTimerManager().ClearTimer(InOutHandle);
+		ExcuteIndex++;
+		
+	},Rate,false);
+	
+	
+}
 
 
 TArray<FRefreshRegionInfo> AChemicalBondGameDirector::Get_8_Regions(FVector Range)
@@ -1217,6 +1272,163 @@ void AChemicalBondGameDirector::GetAllOtherRegionGuides( TArray<FVector> SubBoxs
 	
 	
 	
+}
+
+int32 AChemicalBondGameDirector::GetSpawnAtomNumInRegion(float RefreshFrequency)
+{
+	return FMath::Floor(RefreshFrequency*Cbase);
+}
+
+EAtomElementType AChemicalBondGameDirector::GetSpawnAtomTypeInRegion()
+{
+	EAtomElementType AtomElementType=EAtomElementType::C_Normal;
+	
+	// 判断成环否
+	int32 Total_W=Wnormal+Wring;
+	int32 RandomInt=FMath::RandRange(0,Total_W);
+	bool bIsNormal=true;
+	
+	if (RandomInt<=Wnormal)
+	{
+		 bIsNormal=true;
+	}
+	if (Wnormal<RandomInt && RandomInt<=Total_W)
+	{
+		 bIsNormal=false;
+	}
+	
+	//判断原子元素类型
+	Total_W=Wc+Wh+Wo+Wn+Wp;
+	RandomInt=FMath::RandRange(0,Total_W);
+	
+	if (RandomInt<=Wc)
+	{
+		return bIsNormal?EAtomElementType::C_Normal:EAtomElementType::C_Ring;
+	}
+	if (Wc<RandomInt &&RandomInt<=Wc+Wh)
+	{
+		return bIsNormal?EAtomElementType::H_Normal:EAtomElementType::H_Ring;
+	}
+	if (Wc+Wh<RandomInt &&RandomInt<=Wc+Wh+Wo)
+	{
+		return bIsNormal?EAtomElementType::O_Normal:EAtomElementType::O_Ring;
+	}
+	if (Wc+Wh+Wo<RandomInt &&RandomInt<=Wc+Wh+Wo+Wn)
+	{
+		return bIsNormal?EAtomElementType::N_Normal:EAtomElementType::N_Ring;
+	}
+	if (Wc+Wh+Wo+Wn<RandomInt &&RandomInt<=Wc+Wh+Wo+Wn+Wp)
+	{
+		return bIsNormal?EAtomElementType::P_Normal:EAtomElementType::P_Ring;
+	}
+	
+	
+	return AtomElementType;
+	
+}
+
+bool AChemicalBondGameDirector::CanSpawnAtomAtPostion(FVector Location)
+{
+	return true;
+}
+
+FVector AChemicalBondGameDirector::FindSpawnAtomPostion(uint8 regionIndex,uint8 FindNum)
+{
+	if (!RefreshRegionInfos.IsValidIndex(regionIndex)) return FVector();\
+	
+	for (int i = 0; i < FindNum; ++i)
+	{
+			FVector Location=FVector::ZeroVector;
+			FVector MinRange=RefreshRegionInfos[regionIndex].MinRange;
+			FVector MaxRange=RefreshRegionInfos[regionIndex].MaxRange;
+		
+			Location.X=FMath::RandRange(MinRange.X,MaxRange.X);
+			Location.Y=FMath::RandRange(MinRange.Y,MaxRange.Y);
+			Location.Z=MinRange.Z;
+
+			if (CanSpawnAtomAtPostion(Location))
+			{
+				return Location; 
+			}
+		
+		
+	}
+	
+	return FVector::ZeroVector;
+}
+
+void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int32 RegionIndex)
+{
+	
+		if (!AtomClass)
+		{
+			return;
+		}
+
+		UWorld* World = GetWorld();
+		if (!World)
+		{
+			return;
+		}
+
+	
+		for (int32 Index = 0; Index < SpawnNum; ++Index)
+		{
+			const FVector SpawnLocation = FindSpawnAtomPostion(RegionIndex,10);
+			const FRotator SpawnRotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
+			const FTransform SpawnTransform(SpawnRotation, SpawnLocation);
+
+			APlaygroundAtom* Atom = World->SpawnActorDeferred<APlaygroundAtom>(
+				AtomClass,
+				SpawnTransform,
+				this,
+				nullptr,
+				ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			if (!Atom)
+			{
+				continue;
+			}
+
+			Atom->ConfigurePlaygroundAtom(GetSpawnAtomTypeInRegion());
+			Atom->FinishSpawning(SpawnTransform);
+
+			// 添加力
+			if (UFluidMotionComponent* FluidMotion = Atom->GetFluidMotionComponent())
+			{
+				const FVector ImpulseDirection(
+					FMath::RandRange(-1.f, 1.f),
+					FMath::RandRange(-1.f, 1.f),
+					0.f);
+				FluidMotion->AddLinearImpulse(ImpulseDirection.GetSafeNormal() * 260.f);
+			}
+		}
+	}
+
+
+void AChemicalBondGameDirector::SpawnAtomInAllRegions()
+{
+	int32 MainGuideRegionSpawnNum=GetSpawnAtomNumInRegion(MainGuideRefreshFrequency);
+	int32 SubGuideRegionSpawnNum=GetSpawnAtomNumInRegion(SubGuideRefreshFrequency);
+	int32 WeakGuideRegionSpawnNum=GetSpawnAtomNumInRegion(WeakGuideRefreshFrequency);
+	int32 NonGuideRegionSpawnNum=GetSpawnAtomNumInRegion(NoneGuideRefreshFrequency);
+	
+	FRefreshRegionInfo CurrentMainGuideRegionInfo=GetCurrentMainGuideRegionInfo();
+	
+	// 主区域
+	SpawnAtoms(MainGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideIndex);
+
+	// 次区域
+	SpawnAtoms(SubGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.SubGuideRegionIndex[0]);
+	SpawnAtoms(SubGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.SubGuideRegionIndex[1]);
+	
+	// 弱相关区域
+	SpawnAtoms(WeakGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.WeakGuideRegionIndex[0]);
+	SpawnAtoms(WeakGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.WeakGuideRegionIndex[1]);
+	
+	// 无相关区域生成
+	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[0]);
+	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[1]);
+	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[2]);
 }
 
 

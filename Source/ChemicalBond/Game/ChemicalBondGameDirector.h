@@ -133,6 +133,7 @@ struct FRefreshRegionInfo
 	
 };
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnRegionRefreshed,FRefreshRegionInfo,MainGuideRegion);
 
 // 单局规则编排入口，负责局内系统生命周期、原子/化学键注册表、连接决策队列和临时基团物理连接。
 // 后续分子图、危害、胜负和正式物理约束在设计确认后继续接入。
@@ -231,7 +232,10 @@ public:
 	TArray<FRefreshRegionInfo> GetAllGridRegionsInfoAtAtomLifeRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
 	
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	 uint8 GetNextMainGuideRegionIndex(const TArray<FRefreshRegionInfo>& RefreshRegionInfos,uint8 LocalCurrentMainGuideIndex);
+	 int32 GetNextMainGuideRegionIndex(const TArray<FRefreshRegionInfo>& RefreshRegionInfos,uint8 LocalCurrentMainGuideIndex);
+	
+	UFUNCTION(BlueprintCallable,BlueprintPure, Category="BoxRange")
+	FRefreshRegionInfo GetCurrentMainGuideRegionInfo()  ;
 	
 	// 刷新所有区域
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
@@ -245,6 +249,11 @@ public:
 	static uint8 FindRegionIndexByLocation(FVector TargetLocation,  const TArray<FRefreshRegionInfo>& RefreshRegionInfos);
 	
 	
+	// ******刷新区域的功能调用入口 *********
+	UFUNCTION(BlueprintCallable, Category="BoxRange")
+	void StartRefreshRegion(UCameraComponent* Camera, float SpringArmLength, float DeltaTime);
+	
+	
 	
 	// 弃用
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
@@ -256,10 +265,35 @@ public:
 		TArray<FVector>& SubGuide,TArray<FVector>& WeakGuide,TArray<FVector>& NoneGuide);
 	
 	
+	// 原子刷新逻辑
+	
+	UFUNCTION(BlueprintCallable, Category="AtomSpawn")
+	int32 GetSpawnAtomNumInRegion(float RefreshFrequency);
+	
+	UFUNCTION(BlueprintCallable, Category="AtomSpawn")
+	EAtomElementType GetSpawnAtomTypeInRegion();
+	
+	// TODO:检测随机位置是否合法
+	UFUNCTION(Blueprintable, Category="AtomSpawn")
+	bool  CanSpawnAtomAtPostion(FVector Location);
+	
+	UFUNCTION(Blueprintable, Category="AtomSpawn")
+	FVector  FindSpawnAtomPostion(uint8 regionIndex,uint8 FindNum=10);
+	
+	UFUNCTION(Blueprintable, Category="AtomSpawn")
+	void SpawnAtoms(int32 SpawnNum,UClass* AtomClass,int32 RegionIndex);
+	
+	 // * **  原子刷新逻辑入口 **
+	UFUNCTION(Blueprintable, Category="AtomSpawn")
+	void SpawnAtomInAllRegions();
 	
 	bool ValidateBondRegistryConsistency(FString& OutError) const;
 	void AssertBondRegistryConsistency();
 
+	// 当区域刷新时广播
+	UPROPERTY(BlueprintAssignable)
+	FOnRegionRefreshed OnRegionRefreshed;
+	
 protected:
 	// 生命周期
 	virtual void BeginPlay() override;
@@ -390,9 +424,36 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
 	float   NoneGuideRefreshFrequency =0.2f;
 	
-	UPROPERTY(BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	uint8 CurrentMainGuideIndex;
+	// 划分8个刷新区域
+	UPROPERTY(BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 CurrentMainGuideIndex=0;
+	
+	UPROPERTY(BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	TArray<FRefreshRegionInfo>  RefreshRegionInfos;
 
+	
+	//原子生成权重参数
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	float Cbase=1.5;
+	
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 Wnormal=100;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 Wring=10;
+	
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 Wc=50;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 Wh=100;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 Wp=10;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 Wn=20;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
+	int32 Wo=30;
+	
+	
+	
 	FGuid GenerateUniqueAtomUid() const;
 	FGuid GenerateUniqueBondUid() const;
 	void RegisterExistingAtomsInWorld();

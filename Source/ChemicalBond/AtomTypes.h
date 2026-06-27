@@ -34,6 +34,8 @@ enum class EAtomElementType : uint8
     N_Ring      UMETA(DisplayName = "N (成环)"),
     P_Normal    UMETA(DisplayName = "P (普通)"),
     P_Ring      UMETA(DisplayName = "P (成环)"),
+    H_Normal    UMETA(DisplayName = "H (普通)"),
+    H_Ring      UMETA(DisplayName = "H (成环)"),
 };
 
 UENUM(BlueprintType)
