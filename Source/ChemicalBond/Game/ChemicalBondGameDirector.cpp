@@ -19,6 +19,7 @@
 #include "NiagaraUserRedirectionParameterStore.h"
 #include "ChemicalBond/Playground/PlaygroundAtom.h"
 #include "Components/SceneComponent.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY(LogChemicalBondDirector);
@@ -866,66 +867,71 @@ void AChemicalBondGameDirector::MarkAtomAsPlayerConnected(AAtomBase* Atom)
 		*Atom->GetAtomUid().ToString());
 }
 
-FVector AChemicalBondGameDirector::GetViewBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime)
+FVector AChemicalBondGameDirector::GetViewBoxRange()
 {
-	FVector HalfSize;
-
-	if (Camera)
+	FVector HalfSize=FVector::Zero();
+	
+	APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
+	if (!PlayerPawn) return FVector::Zero();
+	
+	UCameraComponent* Camera=PlayerPawn->GetComponentByClass<UCameraComponent>();
+	USpringArmComponent* SpringArm=PlayerPawn->GetComponentByClass<USpringArmComponent>();
+	UWorld* World=GetWorld();
+	
+	if ( Camera && SpringArm && World)
 	{
+		float SpringArmLength=SpringArm->TargetArmLength;
+		float DeltaTime=GetWorld()->GetDeltaSeconds();
+		
 		FMinimalViewInfo ViewInfo;
 		Camera->GetCameraView(DeltaTime,ViewInfo);
 		
-		HalfSize.Y=FMath::Tan(FMath::DegreesToRadians(ViewInfo.FOV/2))*SpringArmLength;
-		HalfSize.X=HalfSize.Y*ViewInfo.AspectRatio;
+		HalfSize.X=FMath::Tan(FMath::DegreesToRadians(ViewInfo.FOV/2))*SpringArmLength;
+		HalfSize.Y=HalfSize.X*ViewInfo.AspectRatio;
 		HalfSize.Z=SpringArmLength/2;
+		return  HalfSize*2;
+	
 	}
 	
-	return  HalfSize*2;
+	return FVector::Zero();
 	
 }
 
-FVector AChemicalBondGameDirector::GetLogicRegionBoxRange(UCameraComponent* Camera, float SpringArmLength,
-	float DeltaTime)
+FVector AChemicalBondGameDirector::GetLogicRegionBoxRange()
 {
 	FVector BoxExtent=FVector::Zero();
-	if (Camera)
-	{
-		FVector ViewBoxExtent=GetViewBoxRange(Camera,SpringArmLength,DeltaTime);
+	
+		FVector ViewBoxExtent=GetViewBoxRange();
 		BoxExtent.X=ViewBoxExtent.X*LogicRegionBoxScale;
 		BoxExtent.Y=ViewBoxExtent.Y*LogicRegionBoxScale;
 		BoxExtent.Z=ViewBoxExtent.Z;
-	}
+	
 	
 		return BoxExtent;
 	
 }
 
-FVector AChemicalBondGameDirector::GetAtomLifeRegionBoxRange(UCameraComponent* Camera, float SpringArmLength,
-	float DeltaTime)
+FVector AChemicalBondGameDirector::GetAtomLifeRegionBoxRange()
 {
 	FVector BoxExtent=FVector::Zero();
-	if (Camera)
-	{
-		FVector ViewBoxExtent=GetViewBoxRange(Camera,SpringArmLength,DeltaTime);
+	
+		FVector ViewBoxExtent=GetViewBoxRange();
 		BoxExtent.X=ViewBoxExtent.X*AtomLifeRegionBoxScale;
 		BoxExtent.Y=ViewBoxExtent.Y*AtomLifeRegionBoxScale;
 		BoxExtent.Z=ViewBoxExtent.Z;
-	}
+	
 	
 	return BoxExtent;
 	
 }
 
 
-TArray<FRefreshRegionInfo> AChemicalBondGameDirector::GetAllGridRegionsInfoAtAtomLifeRegion(UCameraComponent* Camera, float SpringArmLength,
-	float DeltaTime)
+TArray<FRefreshRegionInfo> AChemicalBondGameDirector::GetAllGridRegionsInfoAtAtomLifeRegion(float Scale)
 {
-	TArray<FRefreshRegionInfo> RegionInfos;
-	if (Camera)
-	{
-		FVector AtomLifeRegionBoxRange=GetAtomLifeRegionBoxRange(Camera,SpringArmLength,DeltaTime);
-		RegionInfos=Get_8_Regions(AtomLifeRegionBoxRange);
-	}
+	
+	FVector AtomLifeRegionBoxRange=GetAtomLifeRegionBoxRange()*Scale;
+	TArray<FRefreshRegionInfo> RegionInfos=Get_8_Regions(AtomLifeRegionBoxRange);
+	
 	return RegionInfos;
 }
 
@@ -971,7 +977,7 @@ int32 AChemicalBondGameDirector::GetNextMainGuideRegionIndex(const TArray<FRefre
 			
 		}
 
-		if (RegionIndex_1_AtomNum>RegionIndex_2_AtomNum)
+		if (RegionIndex_1_AtomNum>=RegionIndex_2_AtomNum)
 		{
 			return NextCanChooseRegionIndex_1;
 		}
@@ -1005,11 +1011,9 @@ FRefreshRegionInfo AChemicalBondGameDirector::GetCurrentMainGuideRegionInfo()
 	
 }
 
-void AChemicalBondGameDirector::RefreshRegions(bool bIsRandom, UCameraComponent* Camera, 
-                                               float SpringArmLength, 
-                                               float DeltaTime)
+void AChemicalBondGameDirector::RefreshRegions(bool bIsRandom )
 {
-	RefreshRegionInfos=GetAllGridRegionsInfoAtAtomLifeRegion(Camera,SpringArmLength,DeltaTime);
+	RefreshRegionInfos=GetAllGridRegionsInfoAtAtomLifeRegion();
 	
 	if (bIsRandom)
 	{
@@ -1032,12 +1036,12 @@ void AChemicalBondGameDirector::RefreshRegions(bool bIsRandom, UCameraComponent*
 	
 }
 
-void AChemicalBondGameDirector::StartRefreshRegion(UCameraComponent* Camera, float SpringArmLength, float DeltaTime)
+void AChemicalBondGameDirector::StartRefreshRegion()
 {
 	static  uint8 ExcuteIndex=1;
 	if (ExcuteIndex==1)
 	{
-		RefreshRegions(true,Camera,SpringArmLength,DeltaTime);
+		RefreshRegions(true);
 	}
 	
 	
@@ -1047,13 +1051,14 @@ void AChemicalBondGameDirector::StartRefreshRegion(UCameraComponent* Camera, flo
 	FTimerHandle InOutHandle;
 	float Rate=FMath::RandRange(Tmin,Tmax);
 	
-	World->GetTimerManager().SetTimer(InOutHandle,[&]()
+	FTimerManager& TimerManager=World->GetTimerManager();
+	TimerManager.SetTimer(InOutHandle,[&]()
 	{
 		// 递归调用刷新区域函数
-		RefreshRegions(false,Camera,SpringArmLength,DeltaTime);
-		StartRefreshRegion(Camera,SpringArmLength,DeltaTime);
+		RefreshRegions(false); // 调试用
+		StartRefreshRegion();
 		
-		World->GetTimerManager().ClearTimer(InOutHandle);
+	
 		ExcuteIndex++;
 		
 	},Rate,false);
@@ -1065,7 +1070,7 @@ void AChemicalBondGameDirector::StartRefreshRegion(UCameraComponent* Camera, flo
 TArray<FRefreshRegionInfo> AChemicalBondGameDirector::Get_8_Regions(FVector Range)
 {
 		TArray<FRefreshRegionInfo> RegionInfos;
-		FVector AtomLifeRegionBoxRange=Range;
+		FVector AtomLifeRegionBoxRange=Range*1.8;
 	
 		FRefreshRegionInfo RefreshRegionInfo_0;
 		RefreshRegionInfo_0.MinRange=FVector(AtomLifeRegionBoxRange.X*-0.5,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
@@ -1193,87 +1198,6 @@ uint8 AChemicalBondGameDirector::FindRegionIndexByLocation(FVector TargetLocatio
 	return -1;
 }
 
-TArray<FVector> AChemicalBondGameDirector::GetGridCenters(const FVector Center, const FVector Extent,FVector& SubBoxExtent)
-{
-	
-	 SubBoxExtent=Extent/3;
-	
-	TArray<FVector> SubBoxCenters;
-	FVector Min = Center - Extent;
-	FVector Max = Center + Extent;
-	float StepX = (Max.X - Min.X) / 3.0f;
-	float StepY = (Max.Y - Min.Y) / 3.0f;
-	float FixedZ = Center.Z; 
-
-	for (int32 i = 0; i < 3; i++)
-	{
-		for (int32 j = 0; j < 3; j++)
-		{
-			float X = Min.X + StepX * (i + 0.5f);
-			float Y = Min.Y + StepY * (j + 0.5f);
-			SubBoxCenters.Add(FVector(X, Y, FixedZ));
-		}
-	}
-	
-	//SubBoxCenters.Remove(Center);
-	SubBoxCenters.RemoveAt(4);
-	
-	return SubBoxCenters;
-	
-}
-
-FVector AChemicalBondGameDirector::GetFirstRefreshMainGuideRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime,FVector& Extent)
-{
-	FVector MainGuideRegionCenter=FVector::Zero();
-	
-	if (Camera)
-	{
-		FVector LogicRegionBoxRange=GetLogicRegionBoxRange(Camera,SpringArmLength,DeltaTime);
-		FVector LogicRegionBoxCenter=Camera->GetOwner()->GetActorLocation();
-		FVector SubBoxExtent=FVector::Zero();
-		TArray<FVector> GridCenters=GetGridCenters(LogicRegionBoxCenter,LogicRegionBoxRange,SubBoxExtent);
-		
-		Extent=SubBoxExtent;
-		
-		// 获得索引值在（0-7）范围中的随机元素
-		MainGuideRegionCenter=GridCenters[FMath::RandRange(0,GridCenters.Num()-1)];
-		
-	}
-	
-	
-	return MainGuideRegionCenter;
-	
-}
-
-void AChemicalBondGameDirector::GetAllOtherRegionGuides( TArray<FVector> SubBoxsCenter, const FVector& MainGuide,
-                                                       TArray<FVector>& SubGuide, TArray<FVector>& WeakGuide, TArray<FVector>& NoneGuide)
-{
-	if (SubBoxsCenter.IsEmpty()) return ;
-	
-	SubBoxsCenter.Remove(MainGuide);
-	
-	SubBoxsCenter.Sort([&](const FVector& A, const FVector& B)
-	{
-		return (A-MainGuide).Size()<(B-MainGuide).Size();
-	});
-	
-	// 次区域
-	SubGuide.Add(SubBoxsCenter[0]);
-	SubGuide.Add(SubBoxsCenter[1]);
-	
-	// 弱区域
-	WeakGuide.Add(SubBoxsCenter[2]);
-	WeakGuide.Add(SubBoxsCenter[3]);
-	
-	// 无相关区域
-	NoneGuide.Add(SubBoxsCenter[4]);
-	NoneGuide.Add(SubBoxsCenter[5]);
-	NoneGuide.Add(SubBoxsCenter[6]);
-	
-	
-	
-}
-
 int32 AChemicalBondGameDirector::GetSpawnAtomNumInRegion(float RefreshFrequency)
 {
 	return FMath::Floor(RefreshFrequency*Cbase);
@@ -1334,13 +1258,44 @@ bool AChemicalBondGameDirector::CanSpawnAtomAtPostion(FVector Location)
 
 FVector AChemicalBondGameDirector::FindSpawnAtomPostion(uint8 regionIndex,uint8 FindNum)
 {
-	if (!RefreshRegionInfos.IsValidIndex(regionIndex)) return FVector();\
+	if (!RefreshRegionInfos.IsValidIndex(regionIndex)) return FVector();
 	
 	for (int i = 0; i < FindNum; ++i)
 	{
 			FVector Location=FVector::ZeroVector;
 			FVector MinRange=RefreshRegionInfos[regionIndex].MinRange;
 			FVector MaxRange=RefreshRegionInfos[regionIndex].MaxRange;
+		
+	
+			FVector ViewRangeHalf =GetViewBoxRange()/2;
+
+			/*// 排除相机视图之内的位置
+			float MaxRangeX=0;
+			if (MaxRange.X<0)
+			{
+				 MaxRangeX=FMath::Min(MaxRange.X,ViewRangeHalf.X*-1);
+			}
+			float MinRangeX=0;
+			if (MinRange.X>0)
+			{
+				MinRangeX=FMath::Max(MaxRange.X,ViewRangeHalf.X);
+			}
+		
+			float MaxRangeY=0;
+			if (MaxRange.Y<0)
+			{
+				MaxRangeY=FMath::Min(MaxRange.Y,ViewRangeHalf.Y*-1);
+			}
+			float MinRangeY=0;
+			if (MinRange.Y>0)
+			{
+				MinRangeY=FMath::Max(MinRange.Y,ViewRangeHalf.Y);
+			}
+		
+		
+			Location.X=FMath::RandRange(MinRangeX,MaxRangeX);
+			Location.Y=FMath::RandRange(MinRangeY,MaxRangeY);
+			Location.Z=MinRange.Z;*/
 		
 			Location.X=FMath::RandRange(MinRange.X,MaxRange.X);
 			Location.Y=FMath::RandRange(MinRange.Y,MaxRange.Y);
@@ -1371,10 +1326,15 @@ void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int
 			return;
 		}
 
+		APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
+		if (!PlayerPawn) return;	
 	
 		for (int32 Index = 0; Index < SpawnNum; ++Index)
 		{
-			const FVector SpawnLocation = FindSpawnAtomPostion(RegionIndex,10);
+			
+			const FVector SpawnLocation = FindSpawnAtomPostion(RegionIndex,10)+PlayerPawn->GetActorLocation();
+			if (SpawnLocation==FVector::ZeroVector) return ;
+			
 			const FRotator SpawnRotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
 			const FTransform SpawnTransform(SpawnRotation, SpawnLocation);
 
@@ -1389,7 +1349,8 @@ void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int
 				continue;
 			}
 
-			Atom->ConfigurePlaygroundAtom(GetSpawnAtomTypeInRegion());
+			EAtomElementType  AtomElementType=GetSpawnAtomTypeInRegion();
+			Atom->ConfigurePlaygroundAtom(AtomElementType);
 			Atom->FinishSpawning(SpawnTransform);
 
 			// 添加力
@@ -1402,6 +1363,10 @@ void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int
 				FluidMotion->AddLinearImpulse(ImpulseDirection.GetSafeNormal() * 260.f);
 			}
 		}
+		
+	GEngine->AddOnScreenDebugMessage(-1,3,FColor::Green,
+		FString::Printf(TEXT("生成原子：%d"),SpawnNum));
+	
 	}
 
 

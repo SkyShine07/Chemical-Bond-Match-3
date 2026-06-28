@@ -218,18 +218,18 @@ public:
 	// 计算8个刷新区域
 	
 	// 计算三个区域范围：生存，逻辑，可视范围
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static FVector GetViewBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	UFUNCTION(BlueprintCallable,BlueprintPure, Category="BoxRange")
+	 FVector GetViewBoxRange();
 
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	FVector GetLogicRegionBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	UFUNCTION(BlueprintCallable, BlueprintPure,Category="BoxRange")
+	FVector GetLogicRegionBoxRange();
 
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	FVector GetAtomLifeRegionBoxRange(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	UFUNCTION(BlueprintCallable, BlueprintPure,Category="BoxRange")
+	FVector GetAtomLifeRegionBoxRange();
 	
 	
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	TArray<FRefreshRegionInfo> GetAllGridRegionsInfoAtAtomLifeRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime);
+	TArray<FRefreshRegionInfo> GetAllGridRegionsInfoAtAtomLifeRegion(float Scale=1.f);
 	
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
 	 int32 GetNextMainGuideRegionIndex(const TArray<FRefreshRegionInfo>& RefreshRegionInfos,uint8 LocalCurrentMainGuideIndex);
@@ -239,7 +239,7 @@ public:
 	
 	// 刷新所有区域
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	void RefreshRegions(bool bIsRandom , UCameraComponent* Camera, float SpringArmLength, float DeltaTime);
+	void RefreshRegions(bool bIsRandom );
 	
 	// 生成8个区域信息
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
@@ -251,19 +251,10 @@ public:
 	
 	// ******刷新区域的功能调用入口 *********
 	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	void StartRefreshRegion(UCameraComponent* Camera, float SpringArmLength, float DeltaTime);
+	void StartRefreshRegion();
 	
 	
-	
-	// 弃用
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static TArray<FVector> GetGridCenters(const FVector Center, const FVector Extent,FVector& SubBoxExtent);
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	FVector GetFirstRefreshMainGuideRegion(UCameraComponent* Camera,float SpringArmLength,float DeltaTime,FVector& Extent);
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static void GetAllOtherRegionGuides(TArray<FVector> SubBoxsCenter, const FVector& MainGuide,
-		TArray<FVector>& SubGuide,TArray<FVector>& WeakGuide,TArray<FVector>& NoneGuide);
-	
+
 	
 	// 原子刷新逻辑
 	
@@ -413,16 +404,16 @@ private:
 	float Tmax =1.5f;
 	
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float MainGuideRefreshFrequency =0.8f;
+	float MainGuideRefreshFrequency =1.2f;
 	
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float SubGuideRefreshFrequency =0.6f;
+	float SubGuideRefreshFrequency =0.9f;
 	
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float  WeakGuideRefreshFrequency =0.4f;
+	float  WeakGuideRefreshFrequency =0.7f;
 	
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float   NoneGuideRefreshFrequency =0.2f;
+	float   NoneGuideRefreshFrequency =0.6f;
 	
 	// 划分8个刷新区域
 	UPROPERTY(BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
