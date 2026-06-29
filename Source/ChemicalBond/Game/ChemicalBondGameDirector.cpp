@@ -979,12 +979,12 @@ int32 AChemicalBondGameDirector::GetNextMainGuideRegionIndex(const TArray<FRefre
 
 		if (RegionIndex_1_AtomNum>=RegionIndex_2_AtomNum)
 		{
-			return NextCanChooseRegionIndex_1;
+			return RefreshRegionInfos[NextCanChooseRegionIndex_1].CentrallySymmetricRegionIndex;
 		}
 		
 		if (RegionIndex_1_AtomNum<RegionIndex_2_AtomNum)
 		{
-			return NextCanChooseRegionIndex_2;
+			return RefreshRegionInfos[NextCanChooseRegionIndex_2].CentrallySymmetricRegionIndex;
 		}
 		
 		if (RegionIndex_1_AtomNum==RegionIndex_2_AtomNum)
@@ -1253,10 +1253,22 @@ EAtomElementType AChemicalBondGameDirector::GetSpawnAtomTypeInRegion()
 
 bool AChemicalBondGameDirector::CanSpawnAtomAtPostion(FVector Location)
 {
-	return true;
+	
+	APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
+	if (!PlayerPawn) return false;	
+	float Radial=GetDefault<APlaygroundAtom>()->GetProximityRadius();
+	
+	TArray<TEnumAsByte<EObjectTypeQuery>> ObjectTypes; 
+	TArray<AActor*> ActorsToIgnore; 
+	ActorsToIgnore.Add(this);
+	TArray<class AActor*> OutActors;
+	UKismetSystemLibrary::SphereOverlapActors(this,Location+PlayerPawn->GetActorLocation(),
+	Radial,ObjectTypes,AAtomBase::StaticClass(),ActorsToIgnore,OutActors);
+	
+	return OutActors.IsEmpty()?true:false;
 }
 
-FVector AChemicalBondGameDirector::FindSpawnAtomPostion(uint8 regionIndex,uint8 FindNum)
+FVector AChemicalBondGameDirector::FindSpawnAtomPostionOffset(uint8 regionIndex,uint8 FindNum)
 {
 	if (!RefreshRegionInfos.IsValidIndex(regionIndex)) return FVector();
 	
@@ -1332,7 +1344,7 @@ void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int
 		for (int32 Index = 0; Index < SpawnNum; ++Index)
 		{
 			
-			const FVector SpawnLocation = FindSpawnAtomPostion(RegionIndex,10)+PlayerPawn->GetActorLocation();
+			const FVector SpawnLocation = FindSpawnAtomPostionOffset(RegionIndex,10)+PlayerPawn->GetActorLocation();
 			if (SpawnLocation==FVector::ZeroVector) return ;
 			
 			const FRotator SpawnRotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
@@ -1352,6 +1364,7 @@ void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int
 			EAtomElementType  AtomElementType=GetSpawnAtomTypeInRegion();
 			Atom->ConfigurePlaygroundAtom(AtomElementType);
 			Atom->FinishSpawning(SpawnTransform);
+			SpawnAtom(Atom);
 
 			// 添加力
 			if (UFluidMotionComponent* FluidMotion = Atom->GetFluidMotionComponent())
@@ -1364,10 +1377,40 @@ void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int
 			}
 		}
 		
-	GEngine->AddOnScreenDebugMessage(-1,3,FColor::Green,
-		FString::Printf(TEXT("生成原子：%d"),SpawnNum));
+	GEngine->AddOnScreenDebugMessage(-1,3,FColor::MakeRandomColor(),
+		FString::Printf(TEXT("区域%d :生成原子%d 个"),RegionIndex,SpawnNum));
 	
 	}
+
+TArray<APlaygroundAtom*> AChemicalBondGameDirector::GetAllAtomsOutLifeRange()
+{
+	TArray<APlaygroundAtom*> PlaygroundAtoms;
+	 TArray<AActor*> OutActorsPlaygroundAtoms;
+	UGameplayStatics::GetAllActorsOfClass(this ,APlaygroundAtom::StaticClass(),OutActorsPlaygroundAtoms);
+	 APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
+	if (!PlayerPawn) return PlaygroundAtoms;
+	FVector PlayerLocation=PlayerPawn->GetActorLocation();
+	FVector	AtomLifeRegionBoxRangeHalf=GetAtomLifeRegionBoxRange()/2;
+	
+	for (AActor* Actor : OutActorsPlaygroundAtoms)
+	{
+		if (!Actor) continue;
+		APlaygroundAtom* PlaygroundAtom=Cast<APlaygroundAtom>(Actor);
+		if (!PlaygroundAtom) continue;
+		
+		 FVector Location=PlaygroundAtom->GetActorLocation();
+		FVector Distance=Location-PlayerLocation;
+		
+		if (FMath::Abs(Distance.X)>AtomLifeRegionBoxRangeHalf.X ||
+			FMath::Abs(Distance.Y)>AtomLifeRegionBoxRangeHalf.Y)
+		{
+			PlaygroundAtoms.Add(PlaygroundAtom);
+		}
+		
+	}
+	return PlaygroundAtoms;
+
+}
 
 
 void AChemicalBondGameDirector::SpawnAtomInAllRegions()
@@ -1379,21 +1422,43 @@ void AChemicalBondGameDirector::SpawnAtomInAllRegions()
 	
 	FRefreshRegionInfo CurrentMainGuideRegionInfo=GetCurrentMainGuideRegionInfo();
 	
-	// 主区域
+
+	
+	
+		// 主区域
 	SpawnAtoms(MainGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideIndex);
 
-	// 次区域
+		// 次区域
 	SpawnAtoms(SubGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.SubGuideRegionIndex[0]);
 	SpawnAtoms(SubGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.SubGuideRegionIndex[1]);
 	
-	// 弱相关区域
+		// 弱相关区域
 	SpawnAtoms(WeakGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.WeakGuideRegionIndex[0]);
 	SpawnAtoms(WeakGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.WeakGuideRegionIndex[1]);
 	
-	// 无相关区域生成
+		// 无相关区域生成
 	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[0]);
 	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[1]);
 	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[2]);
+	
+	
+	TArray<APlaygroundAtom*>PlaygroundAtoms= GetAllAtomsOutLifeRange();
+	if (!PlaygroundAtoms.IsEmpty())
+	{
+		for (APlaygroundAtom* Atom : PlaygroundAtoms)
+		{
+			if (Atom)
+			{
+				TerminateAtom(Atom);
+				//Atom->Destroy();
+			}
+	
+		}
+	
+	}
+	
+		
+
 }
 
 

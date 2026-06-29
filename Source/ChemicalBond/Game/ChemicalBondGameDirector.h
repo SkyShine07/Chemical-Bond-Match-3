@@ -8,6 +8,7 @@
 #include "../AtomTypes.h"
 #include "ChemicalBondGameDirector.generated.h"
 
+class APlaygroundAtom;
 class UCameraComponent;
 class AAtomBase;
 class AChemicalBondGameMode;
@@ -269,10 +270,14 @@ public:
 	bool  CanSpawnAtomAtPostion(FVector Location);
 	
 	UFUNCTION(Blueprintable, Category="AtomSpawn")
-	FVector  FindSpawnAtomPostion(uint8 regionIndex,uint8 FindNum=10);
+	FVector  FindSpawnAtomPostionOffset(uint8 regionIndex,uint8 FindNum=10);
 	
 	UFUNCTION(Blueprintable, Category="AtomSpawn")
 	void SpawnAtoms(int32 SpawnNum,UClass* AtomClass,int32 RegionIndex);
+	
+	UFUNCTION(Blueprintable, Category="AtomSpawn")
+	TArray<APlaygroundAtom*> GetAllAtomsOutLifeRange();
+	
 	
 	 // * **  原子刷新逻辑入口 **
 	UFUNCTION(Blueprintable, Category="AtomSpawn")
@@ -425,7 +430,7 @@ private:
 	
 	//原子生成权重参数
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	float Cbase=1.5;
+	float Cbase=3;
 	
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
 	int32 Wnormal=100;
@@ -442,6 +447,8 @@ private:
 	int32 Wn=20;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
 	int32 Wo=30;
+	
+
 	
 	
 	
