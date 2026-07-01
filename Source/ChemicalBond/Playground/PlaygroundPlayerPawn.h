@@ -4,6 +4,7 @@
 #include "../AtomBase.h"
 #include "PlaygroundPlayerPawn.generated.h"
 
+class UBoxComponent;
 class UCameraComponent;
 class USphereComponent;
 class USpringArmComponent;
@@ -24,6 +25,13 @@ public:
 	virtual void PreInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
+
+	bool GetRefreshRangeSnapshot(
+		FVector& OutCenter,
+		float& OutYawDegrees,
+		FVector2D& OutViewPortHalfExtent,
+		FVector2D& OutLogicHalfExtent,
+		FVector2D& OutLifeSpanHalfExtent) const;
 
 protected:
 	// 策划配置
@@ -49,8 +57,21 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Playground", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCameraComponent> Camera = nullptr;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UBoxComponent> ViewPortBox = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UBoxComponent> LogicBox = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UBoxComponent> LifeSpanLimit = nullptr;
+
 	void PollPlaygroundInput();
 	void PollConnectionDecisionInput(const APlayerController* PlayerController);
+	void UpdateRefreshRangeBoxes();
+	FVector2D CalculateCameraVisibleSize() const;
+	float GetLogicRefreshScale() const;
+	float GetLifeSpanRefreshScale() const;
 
 	bool bWasSpaceDown = false;
 	bool bWasFDown = false;

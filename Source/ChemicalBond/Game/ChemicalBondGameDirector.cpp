@@ -6,9 +6,11 @@
 #include "EngineUtils.h"
 #include "../AtomBase.h"
 #include "ChemicalBondGameMode.h"
+#include "ChemicalBondLevelGoal.h"
+#include "../Playground/PlaygroundAtom.h"
+#include "../Playground/PlaygroundPlayerPawn.h"
 #include "../Movement/FluidMotionComponent.h"
 #include "AI/NavigationSystemBase.h"
-#include "Camera/CameraComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "NiagaraComponent.h"
@@ -17,9 +19,11 @@
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "NiagaraUserRedirectionParameterStore.h"
-#include "ChemicalBond/Playground/PlaygroundAtom.h"
 #include "Components/SceneComponent.h"
-#include "GameFramework/SpringArmComponent.h"
+#include "DrawDebugHelpers.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
+#include "ProceduralMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY(LogChemicalBondDirector);
@@ -88,6 +92,131 @@ bool TryGetAtomBondRecord(const AAtomBase* Atom, FGuid BondUid, FBondRecord& Out
 
 	return false;
 }
+
+bool PairKeyContainsAtomUid(const FAtomInteractionPairKey& PairKey, FGuid AtomUid)
+{
+	return PairKey.FirstAtomUid == AtomUid || PairKey.SecondAtomUid == AtomUid;
+}
+
+bool RingCandidateContainsAtomUid(const FChemicalBondRingCandidate& Candidate, FGuid AtomUid)
+{
+	return Candidate.RingAtomUid == AtomUid
+		|| Candidate.TargetAtomUid == AtomUid
+		|| Candidate.PathAtomUids.Contains(AtomUid);
+}
+
+struct FRefreshRangeFrame
+{
+	FVector Center = FVector::ZeroVector;
+	FVector AxisX = FVector::ForwardVector;
+	FVector AxisY = FVector::RightVector;
+	float YawDegrees = 0.f;
+	FVector2D ViewPortHalfExtent = FVector2D::ZeroVector;
+	FVector2D LogicHalfExtent = FVector2D::ZeroVector;
+	FVector2D LifeSpanHalfExtent = FVector2D::ZeroVector;
+
+	bool IsValid() const
+	{
+		return LifeSpanHalfExtent.X > 0.f && LifeSpanHalfExtent.Y > 0.f
+			&& LogicHalfExtent.X > 0.f && LogicHalfExtent.Y > 0.f
+			&& ViewPortHalfExtent.X > 0.f && ViewPortHalfExtent.Y > 0.f;
+	}
+
+	FVector2D ToLocal2D(const FVector& WorldLocation) const
+	{
+		const FVector Delta = ChemicalBondGameplayPlane::ProjectVector(WorldLocation - Center);
+		return FVector2D(FVector::DotProduct(Delta, AxisX), FVector::DotProduct(Delta, AxisY));
+	}
+
+	FVector ToWorld(const FVector2D& LocalLocation) const
+	{
+		return ChemicalBondGameplayPlane::ProjectLocation(Center + AxisX * LocalLocation.X + AxisY * LocalLocation.Y);
+	}
+};
+
+bool TryBuildRefreshRangeFrame(const AChemicalBondGameDirector* Director, FRefreshRangeFrame& OutFrame)
+{
+	if (!Director)
+	{
+		return false;
+	}
+
+	const APlaygroundPlayerPawn* PlayerPawn =
+		Cast<APlaygroundPlayerPawn>(UGameplayStatics::GetPlayerPawn(Director, 0));
+	if (!PlayerPawn)
+	{
+		return false;
+	}
+
+	FVector Center = FVector::ZeroVector;
+	float YawDegrees = 0.f;
+	FVector2D ViewPortHalfExtent = FVector2D::ZeroVector;
+	FVector2D LogicHalfExtent = FVector2D::ZeroVector;
+	FVector2D LifeSpanHalfExtent = FVector2D::ZeroVector;
+	if (!PlayerPawn->GetRefreshRangeSnapshot(
+		Center,
+		YawDegrees,
+		ViewPortHalfExtent,
+		LogicHalfExtent,
+		LifeSpanHalfExtent))
+	{
+		return false;
+	}
+
+	OutFrame.Center = Center;
+	OutFrame.YawDegrees = YawDegrees;
+	OutFrame.AxisX = MakePlanarDirectionFromYaw(YawDegrees);
+	OutFrame.AxisY = MakePlanarDirectionFromYaw(YawDegrees + 90.f);
+	OutFrame.ViewPortHalfExtent = ViewPortHalfExtent;
+	OutFrame.LogicHalfExtent = LogicHalfExtent;
+	OutFrame.LifeSpanHalfExtent = LifeSpanHalfExtent;
+	return OutFrame.IsValid();
+}
+
+float GetRefreshElementMass(EAtomElementType ElementType)
+{
+	switch (ElementType)
+	{
+	case EAtomElementType::H:
+	case EAtomElementType::H_Normal:
+		return 1.f;
+	case EAtomElementType::O_Normal:
+	case EAtomElementType::O_Ring:
+		return 16.f;
+	case EAtomElementType::N_Normal:
+	case EAtomElementType::N_Ring:
+		return 14.f;
+	case EAtomElementType::P_Normal:
+	case EAtomElementType::P_Ring:
+		return 31.f;
+	case EAtomElementType::C_Normal:
+	case EAtomElementType::C_Ring:
+	default:
+		return 12.f;
+	}
+}
+
+float GetRefreshElementProximityRadius(EAtomElementType ElementType)
+{
+	return 120.f + FMath::Max(GetRefreshElementMass(ElementType), 1.f) * 8.f;
+}
+
+float DistanceSquaredPointToSegment2D(const FVector& Point, const FVector& SegmentStart, const FVector& SegmentEnd)
+{
+	const FVector Point2D = ChemicalBondGameplayPlane::ProjectLocation(Point);
+	const FVector Start2D = ChemicalBondGameplayPlane::ProjectLocation(SegmentStart);
+	const FVector End2D = ChemicalBondGameplayPlane::ProjectLocation(SegmentEnd);
+	const FVector Segment = End2D - Start2D;
+	const float SegmentLengthSquared = Segment.SizeSquared();
+	if (SegmentLengthSquared <= KINDA_SMALL_NUMBER)
+	{
+		return FVector::DistSquared(Point2D, Start2D);
+	}
+
+	const float T = FMath::Clamp(FVector::DotProduct(Point2D - Start2D, Segment) / SegmentLengthSquared, 0.f, 1.f);
+	const FVector ClosestPoint = Start2D + Segment * T;
+	return FVector::DistSquared(Point2D, ClosestPoint);
+}
 }
 
 AChemicalBondGameDirector::AChemicalBondGameDirector()
@@ -95,6 +224,24 @@ AChemicalBondGameDirector::AChemicalBondGameDirector()
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	PrimaryActorTick.TickGroup = TG_PostPhysics;
+	RefreshAtomClass = APlaygroundAtom::StaticClass();
+
+	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+	RootComponent = Root;
+
+	InteractionRangeFillMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("InteractionRangeFillMesh"));
+	InteractionRangeFillMesh->SetupAttachment(RootComponent);
+	InteractionRangeFillMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	InteractionRangeFillMesh->SetGenerateOverlapEvents(false);
+	InteractionRangeFillMesh->SetCastShadow(false);
+	InteractionRangeFillMesh->bUseAsyncCooking = true;
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> InteractionRangeFillMaterialAsset(
+		TEXT("/Engine/EngineDebugMaterials/M_SimpleUnlitTranslucent.M_SimpleUnlitTranslucent"));
+	if (InteractionRangeFillMaterialAsset.Succeeded())
+	{
+		InteractionRangeFillMaterial = InteractionRangeFillMaterialAsset.Object;
+	}
 
 	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> BondVisualAsset(
 		TEXT("/Game/VFX/huaxuejian/NS_LianJie.NS_LianJie"));
@@ -114,7 +261,23 @@ AChemicalBondGameDirector::AChemicalBondGameDirector()
 void AChemicalBondGameDirector::BeginPlay()
 {
 	Super::BeginPlay();
-	
+
+	if (InteractionRangeFillMesh && InteractionRangeFillMaterial)
+	{
+		InteractionRangeFillMaterialInstance = UMaterialInstanceDynamic::Create(InteractionRangeFillMaterial, this);
+		if (InteractionRangeFillMaterialInstance)
+		{
+			InteractionRangeFillMaterialInstance->SetVectorParameterValue(FName(TEXT("Color")), InteractionRangeFillColor);
+			InteractionRangeFillMaterialInstance->SetVectorParameterValue(FName(TEXT("BaseColor")), InteractionRangeFillColor);
+			InteractionRangeFillMaterialInstance->SetVectorParameterValue(FName(TEXT("TintColor")), InteractionRangeFillColor);
+			InteractionRangeFillMaterialInstance->SetScalarParameterValue(FName(TEXT("Opacity")), InteractionRangeFillColor.A);
+			InteractionRangeFillMesh->SetMaterial(0, InteractionRangeFillMaterialInstance);
+		}
+		else
+		{
+			InteractionRangeFillMesh->SetMaterial(0, InteractionRangeFillMaterial);
+		}
+	}
 
 }
 
@@ -132,6 +295,9 @@ void AChemicalBondGameDirector::Tick(float DeltaSeconds)
 	ProcessConnectionCandidates(DeltaSeconds);
 	ProcessActiveDecision(DeltaSeconds);
 	ProcessPhysicalConnections(DeltaSeconds);
+	ProcessPlayerMoleculeDetection();
+	ProcessSceneRefresh(DeltaSeconds);
+	UpdateInteractionRangeFillVisual();
 	UpdateAllBondVisuals();
 	SpawnOrUpdateActiveDecisionWarningVisual();
 	ConstrainRegisteredAtomsToGameplayPlane();
@@ -168,6 +334,7 @@ void AChemicalBondGameDirector::StartDirector()
 	bDirectorStarted = true;
 	SetActorTickEnabled(true);
 	RegisterExistingAtomsInWorld();
+	InitializeRefreshRuntime();
 	AssertBondRegistryConsistency();
 }
 
@@ -197,8 +364,23 @@ void AChemicalBondGameDirector::StopDirector()
 		}
 	}
 	BondVisualComponents.Reset();
+	if (InteractionRangeFillMesh)
+	{
+		InteractionRangeFillMesh->ClearAllMeshSections();
+	}
 	DestroyActiveDecisionWarningVisual();
 	bHasActiveDecisionRequest = false;
+	RingDecisionQueue.Reset();
+	bHasActiveRingDecision = false;
+	ActiveRingCandidate = FChemicalBondRingCandidate();
+	ActiveRingClosingBondUid.Invalidate();
+	DemotedRingAtomUids.Reset();
+	CompletedRingAtomUids.Reset();
+	bPlayerMoleculeDirty = false;
+	bVictoryReported = false;
+	RefreshTimeRemaining = 0.f;
+	GuideTimeRemaining = 0.f;
+	CurrentMainGuideRegion = INDEX_NONE;
 }
 
 bool AChemicalBondGameDirector::IsDirectorStarted() const
@@ -265,6 +447,7 @@ bool AChemicalBondGameDirector::TerminateAtomByUid(FGuid AtomUid)
 		return false;
 	}
 
+	PruneStaleAtomRegistryEntries();
 	AssertBondRegistryConsistency();
 
 	TWeakObjectPtr<AAtomBase>* AtomPtr = AtomRegistry.Find(AtomUid);
@@ -296,12 +479,15 @@ bool AChemicalBondGameDirector::TerminateAtomByUid(FGuid AtomUid)
 
 	AtomRegistry.Remove(AtomUid);
 	LockedAtomUids.Remove(AtomUid);
+	DemotedRingAtomUids.Remove(AtomUid);
+	CompletedRingAtomUids.Remove(AtomUid);
 	if (Atom)
 	{
 		Atom->ClearAtomUid();
 	}
 
 	AssertBondRegistryConsistency();
+	MarkPlayerMoleculeDirty();
 	return true;
 }
 
@@ -322,6 +508,155 @@ TArray<FGuid> AChemicalBondGameDirector::GetAllAtomUids() const
 	TArray<FGuid> AtomUids;
 	AtomRegistry.GetKeys(AtomUids);
 	return AtomUids;
+}
+
+int32 AChemicalBondGameDirector::PruneStaleAtomRegistryEntries()
+{
+	TArray<FGuid> StaleAtomUids;
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		if (!AtomPair.Key.IsValid() || !AtomPair.Value.IsValid())
+		{
+			StaleAtomUids.Add(AtomPair.Key);
+		}
+	}
+
+	int32 PrunedCount = 0;
+	for (const FGuid& AtomUid : StaleAtomUids)
+	{
+		if (DoesBondRegistryReferenceAtom(AtomUid))
+		{
+			UE_LOG(LogChemicalBondDirector, Error,
+				TEXT("[Game:Director] Stale atom registry entry still has registered bonds and cannot be pruned. AtomUid=%s"),
+				*AtomUid.ToString());
+			continue;
+		}
+
+		AtomRegistry.Remove(AtomUid);
+		ClearTransientReferencesForAtom(AtomUid);
+		++PrunedCount;
+
+		UE_LOG(LogChemicalBondDirector, Warning,
+			TEXT("[Game:Director] Pruned stale atom registry entry without bonds. AtomUid=%s"),
+			*AtomUid.ToString());
+	}
+
+	return PrunedCount;
+}
+
+bool AChemicalBondGameDirector::DoesBondRegistryReferenceAtom(FGuid AtomUid) const
+{
+	if (!AtomUid.IsValid())
+	{
+		return false;
+	}
+
+	for (const TPair<FGuid, FChemicalBondRegistryRecord>& BondPair : BondRegistry)
+	{
+		const FChemicalBondRegistryRecord& Record = BondPair.Value;
+		if (Record.AtomAUid == AtomUid || Record.AtomBUid == AtomUid)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void AChemicalBondGameDirector::ClearTransientReferencesForAtom(FGuid AtomUid)
+{
+	for (auto CandidateIt = ConnectionCandidates.CreateIterator(); CandidateIt; ++CandidateIt)
+	{
+		if (PairKeyContainsAtomUid(CandidateIt.Key(), AtomUid))
+		{
+			CandidateIt.RemoveCurrent();
+		}
+	}
+
+	for (int32 DecisionIndex = DecisionQueue.Num() - 1; DecisionIndex >= 0; --DecisionIndex)
+	{
+		FAtomDecisionRequest& Request = DecisionQueue[DecisionIndex];
+		if (!PairKeyContainsAtomUid(Request.PairKey, AtomUid))
+		{
+			continue;
+		}
+
+		if (AAtomBase* FreeAtom = Request.FreeAtom.Get())
+		{
+			if (FreeAtom->GetAtomState() == EAtomState::PendingDecision)
+			{
+				FreeAtom->SetAtomState(EAtomState::Free);
+			}
+			UnlockAtom(FreeAtom);
+		}
+		if (AAtomBase* ConnectedAtom = Request.ConnectedAtom.Get())
+		{
+			UnlockAtom(ConnectedAtom);
+		}
+		ReleaseDecisionPair(Request.PairKey);
+		DecisionQueue.RemoveAt(DecisionIndex, 1, EAllowShrinking::No);
+	}
+
+	bool bShouldStartNextDecision = false;
+	if (bHasActiveDecisionRequest && PairKeyContainsAtomUid(ActiveDecisionRequest.PairKey, AtomUid))
+	{
+		AAtomBase* ConnectedAtom = ActiveDecisionRequest.ConnectedAtom.Get();
+		AAtomBase* FreeAtom = ActiveDecisionRequest.FreeAtom.Get();
+		DestroyActiveDecisionWarningVisual();
+		if (FreeAtom && FreeAtom->GetAtomState() == EAtomState::PendingDecision)
+		{
+			FreeAtom->SetAtomState(EAtomState::Free);
+		}
+		UnlockAtom(ConnectedAtom);
+		UnlockAtom(FreeAtom);
+		ReleaseDecisionPair(ActiveDecisionRequest.PairKey);
+		bHasActiveDecisionRequest = false;
+		ActiveDecisionRequest = FAtomDecisionRequest();
+		bShouldStartNextDecision = true;
+	}
+
+	for (auto QueuedIt = QueuedDecisionPairKeys.CreateIterator(); QueuedIt; ++QueuedIt)
+	{
+		if (PairKeyContainsAtomUid(*QueuedIt, AtomUid))
+		{
+			QueuedIt.RemoveCurrent();
+		}
+	}
+
+	LockedAtomUids.Remove(AtomUid);
+	DemotedRingAtomUids.Remove(AtomUid);
+	CompletedRingAtomUids.Remove(AtomUid);
+	RigidGroupLocalTransforms.Remove(AtomUid);
+	for (TPair<FGuid, TMap<FGuid, FTransform>>& GroupPair : RigidGroupLocalTransforms)
+	{
+		GroupPair.Value.Remove(AtomUid);
+	}
+
+	for (int32 CandidateIndex = RingDecisionQueue.Num() - 1; CandidateIndex >= 0; --CandidateIndex)
+	{
+		if (RingCandidateContainsAtomUid(RingDecisionQueue[CandidateIndex], AtomUid))
+		{
+			RingDecisionQueue.RemoveAt(CandidateIndex, 1, EAllowShrinking::No);
+		}
+	}
+
+	bool bShouldStartNextRingDecision = false;
+	if (bHasActiveRingDecision && RingCandidateContainsAtomUid(ActiveRingCandidate, AtomUid))
+	{
+		bHasActiveRingDecision = false;
+		ActiveRingCandidate = FChemicalBondRingCandidate();
+		ActiveRingClosingBondUid.Invalidate();
+		bShouldStartNextRingDecision = true;
+	}
+
+	if (bShouldStartNextDecision)
+	{
+		StartNextDecisionRequest();
+	}
+	if (bShouldStartNextRingDecision)
+	{
+		StartNextRingDecision();
+	}
 }
 
 FGuid AChemicalBondGameDirector::LinkAtoms(
@@ -362,6 +697,7 @@ FGuid AChemicalBondGameDirector::LinkAtoms(
 		return FGuid();
 	}
 
+	PruneStaleAtomRegistryEntries();
 	AssertBondRegistryConsistency();
 
 	const FGuid BondUid = GenerateUniqueBondUid();
@@ -391,6 +727,7 @@ FGuid AChemicalBondGameDirector::LinkAtoms(
 	RefreshAtomBondLayouts(AtomA, AtomB);
 	SpawnOrUpdateBondVisual(BondUid);
 	AssertBondRegistryConsistency();
+	MarkPlayerMoleculeDirty();
 	return BondUid;
 }
 
@@ -401,6 +738,7 @@ bool AChemicalBondGameDirector::CutBond(FGuid BondUid)
 		return false;
 	}
 
+	PruneStaleAtomRegistryEntries();
 	AssertBondRegistryConsistency();
 
 	FChemicalBondRegistryRecord Record;
@@ -427,6 +765,7 @@ bool AChemicalBondGameDirector::CutBond(FGuid BondUid)
 	RefreshAtomBondLayouts(AtomA, AtomB);
 	ApplyGentleRepulsion(AtomA, AtomB, TEXT("CutBond"));
 	AssertBondRegistryConsistency();
+	MarkPlayerMoleculeDirty();
 	return true;
 }
 
@@ -822,6 +1161,12 @@ void AChemicalBondGameDirector::HandleAtomProximityExit(AAtomBase* AtomA, AAtomB
 
 bool AChemicalBondGameDirector::HandleDecisionConfirmInput()
 {
+	// 成环决策优先于普通连接决策处理空格输入。
+	if (bHasActiveRingDecision)
+	{
+		return HandleRingDecisionConfirmInput();
+	}
+
 	if (!bHasActiveDecisionRequest)
 	{
 		StartNextDecisionRequest();
@@ -839,6 +1184,12 @@ bool AChemicalBondGameDirector::HandleDecisionConfirmInput()
 
 bool AChemicalBondGameDirector::HandleDecisionRejectInput()
 {
+	// 成环决策优先于普通连接决策处理 F 输入。
+	if (bHasActiveRingDecision)
+	{
+		return HandleRingDecisionRejectInput();
+	}
+
 	if (!bHasActiveDecisionRequest)
 	{
 		UE_LOG(LogChemicalBondDirector, Verbose,
@@ -865,602 +1216,8 @@ void AChemicalBondGameDirector::MarkAtomAsPlayerConnected(AAtomBase* Atom)
 		TEXT("[Game:Connection] Mark atom group as PlayerConnected. RootAtom=%s AtomUid=%s"),
 		*GetNameSafe(Atom),
 		*Atom->GetAtomUid().ToString());
+	MarkPlayerMoleculeDirty();
 }
-
-FVector AChemicalBondGameDirector::GetViewBoxRange()
-{
-	FVector HalfSize=FVector::Zero();
-	
-	APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
-	if (!PlayerPawn) return FVector::Zero();
-	
-	UCameraComponent* Camera=PlayerPawn->GetComponentByClass<UCameraComponent>();
-	USpringArmComponent* SpringArm=PlayerPawn->GetComponentByClass<USpringArmComponent>();
-	UWorld* World=GetWorld();
-	
-	if ( Camera && SpringArm && World)
-	{
-		float SpringArmLength=SpringArm->TargetArmLength;
-		float DeltaTime=GetWorld()->GetDeltaSeconds();
-		
-		FMinimalViewInfo ViewInfo;
-		Camera->GetCameraView(DeltaTime,ViewInfo);
-		
-		HalfSize.X=FMath::Tan(FMath::DegreesToRadians(ViewInfo.FOV/2))*SpringArmLength;
-		HalfSize.Y=HalfSize.X*ViewInfo.AspectRatio;
-		HalfSize.Z=SpringArmLength/2;
-		return  HalfSize*2;
-	
-	}
-	
-	return FVector::Zero();
-	
-}
-
-FVector AChemicalBondGameDirector::GetLogicRegionBoxRange()
-{
-	FVector BoxExtent=FVector::Zero();
-	
-		FVector ViewBoxExtent=GetViewBoxRange();
-		BoxExtent.X=ViewBoxExtent.X*LogicRegionBoxScale;
-		BoxExtent.Y=ViewBoxExtent.Y*LogicRegionBoxScale;
-		BoxExtent.Z=ViewBoxExtent.Z;
-	
-	
-		return BoxExtent;
-	
-}
-
-FVector AChemicalBondGameDirector::GetAtomLifeRegionBoxRange()
-{
-	FVector BoxExtent=FVector::Zero();
-	
-		FVector ViewBoxExtent=GetViewBoxRange();
-		BoxExtent.X=ViewBoxExtent.X*AtomLifeRegionBoxScale;
-		BoxExtent.Y=ViewBoxExtent.Y*AtomLifeRegionBoxScale;
-		BoxExtent.Z=ViewBoxExtent.Z;
-	
-	
-	return BoxExtent;
-	
-}
-
-
-TArray<FRefreshRegionInfo> AChemicalBondGameDirector::GetAllGridRegionsInfoAtAtomLifeRegion(float Scale)
-{
-	
-	FVector AtomLifeRegionBoxRange=GetAtomLifeRegionBoxRange()*Scale;
-	TArray<FRefreshRegionInfo> RegionInfos=Get_8_Regions(AtomLifeRegionBoxRange);
-	
-	return RegionInfos;
-}
-
-int32 AChemicalBondGameDirector::GetNextMainGuideRegionIndex(const TArray<FRefreshRegionInfo>& LocalRefreshRegionInfos,uint8 LocalCurrentMainGuideIndex)
-{
-	if (LocalRefreshRegionInfos.IsValidIndex(LocalCurrentMainGuideIndex))
-	{
-		FRefreshRegionInfo MainRegionInfo= LocalRefreshRegionInfos[LocalCurrentMainGuideIndex];
-		FRefreshRegionInfo CentrallySymmetricRegionInfo=LocalRefreshRegionInfos[MainRegionInfo.CentrallySymmetricRegionIndex];
-		
-		TArray<AActor*> AllAtoms;
-		UGameplayStatics::GetAllActorsOfClass(this,AAtomBase::StaticClass(),AllAtoms);
-
-		if (!UGameplayStatics::GetPlayerPawn(this,0))
-		{
-			return -1;
-		}
-		FVector PlayerLocation=UGameplayStatics::GetPlayerPawn(this,0)->GetActorLocation();
-		
-		uint8 NextCanChooseRegionIndex_1=CentrallySymmetricRegionInfo.SubGuideRegionIndex[0];
-		uint8 NextCanChooseRegionIndex_2=CentrallySymmetricRegionInfo.SubGuideRegionIndex[1];
-
-		uint8 RegionIndex_1_AtomNum=0;
-		uint8 RegionIndex_2_AtomNum=0;
-		
-		for (auto Atom : AllAtoms)
-		{
-			if (Atom)
-			{
-				FVector CheckLocation=Atom->GetActorLocation()-PlayerLocation;
-				uint8 Pos=FindRegionIndexByLocation(CheckLocation,RefreshRegionInfos);
-				if (NextCanChooseRegionIndex_1==Pos)
-				{
-					RegionIndex_1_AtomNum++;
-				}
-				
-				if (NextCanChooseRegionIndex_2==Pos)
-				{
-					RegionIndex_2_AtomNum++;
-				}
-				
-			}
-			
-		}
-
-		if (RegionIndex_1_AtomNum>=RegionIndex_2_AtomNum)
-		{
-			return RefreshRegionInfos[NextCanChooseRegionIndex_1].CentrallySymmetricRegionIndex;
-		}
-		
-		if (RegionIndex_1_AtomNum<RegionIndex_2_AtomNum)
-		{
-			return RefreshRegionInfos[NextCanChooseRegionIndex_2].CentrallySymmetricRegionIndex;
-		}
-		
-		if (RegionIndex_1_AtomNum==RegionIndex_2_AtomNum)
-		{
-			return LocalCurrentMainGuideIndex;
-		}
-		
-	}
-
-	return -1;
-}
-
-FRefreshRegionInfo AChemicalBondGameDirector::GetCurrentMainGuideRegionInfo()
-{
-	FRefreshRegionInfo CurrentMainGuideRegionInfo{};
-	
-	if (CurrentMainGuideIndex>=0)
-	{
-		CurrentMainGuideRegionInfo=RefreshRegionInfos[CurrentMainGuideIndex];
-	
-	}
-	
-	return CurrentMainGuideRegionInfo;
-	
-}
-
-void AChemicalBondGameDirector::RefreshRegions(bool bIsRandom )
-{
-	RefreshRegionInfos=GetAllGridRegionsInfoAtAtomLifeRegion();
-	
-	if (bIsRandom)
-	{
-		// 游戏开始时随机选择一个引导区作为主引导区域
-		CurrentMainGuideIndex=FMath::RandRange(0,7);
-	}
-
-	else
-	{
-		CurrentMainGuideIndex=GetNextMainGuideRegionIndex(RefreshRegionInfos,CurrentMainGuideIndex);
-	}
-	
-
-	if (CurrentMainGuideIndex>=0)
-	{
-		OnRegionRefreshed.Broadcast(RefreshRegionInfos[CurrentMainGuideIndex]);
-		SpawnAtomInAllRegions();
-	
-	}
-	
-}
-
-void AChemicalBondGameDirector::StartRefreshRegion()
-{
-	static  uint8 ExcuteIndex=1;
-	if (ExcuteIndex==1)
-	{
-		RefreshRegions(true);
-	}
-	
-	
-	UWorld* World=GetWorld();
-	if (!World) return;
-	
-	FTimerHandle InOutHandle;
-	float Rate=FMath::RandRange(Tmin,Tmax);
-	
-	FTimerManager& TimerManager=World->GetTimerManager();
-	TimerManager.SetTimer(InOutHandle,[&]()
-	{
-		// 递归调用刷新区域函数
-		RefreshRegions(false); // 调试用
-		StartRefreshRegion();
-		
-	
-		ExcuteIndex++;
-		
-	},Rate,false);
-	
-	
-}
-
-
-TArray<FRefreshRegionInfo> AChemicalBondGameDirector::Get_8_Regions(FVector Range)
-{
-		TArray<FRefreshRegionInfo> RegionInfos;
-		FVector AtomLifeRegionBoxRange=Range*1.8;
-	
-		FRefreshRegionInfo RefreshRegionInfo_0;
-		RefreshRegionInfo_0.MinRange=FVector(AtomLifeRegionBoxRange.X*-0.5,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_0.MaxRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*0.5,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_0.CentrallySymmetricRegionIndex=7;
-		RefreshRegionInfo_0.SubGuideRegionIndex.Add(1);
-		RefreshRegionInfo_0.SubGuideRegionIndex.Add(3);
-		RefreshRegionInfo_0.WeakGuideRegionIndex.Add(2);
-		RefreshRegionInfo_0.WeakGuideRegionIndex.Add(5);
-		RefreshRegionInfo_0.NonGuideRegionIndex.Add(4);
-		RefreshRegionInfo_0.NonGuideRegionIndex.Add(6);
-		RefreshRegionInfo_0.NonGuideRegionIndex.Add(7);
-		RegionInfos.Add(RefreshRegionInfo_0);
-		
-		FRefreshRegionInfo RefreshRegionInfo_1;
-		RefreshRegionInfo_1.MinRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_1.MaxRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*0.5,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_1.CentrallySymmetricRegionIndex=6;
-		RefreshRegionInfo_1.SubGuideRegionIndex.Add(0);
-		RefreshRegionInfo_1.SubGuideRegionIndex.Add(2);
-		RefreshRegionInfo_1.WeakGuideRegionIndex.Add(3);
-		RefreshRegionInfo_1.WeakGuideRegionIndex.Add(4);
-		RefreshRegionInfo_1.NonGuideRegionIndex.Add(5);
-		RefreshRegionInfo_1.NonGuideRegionIndex.Add(6);
-		RefreshRegionInfo_1.NonGuideRegionIndex.Add(7);
-		RegionInfos.Add(RefreshRegionInfo_1);
-		
-		FRefreshRegionInfo RefreshRegionInfo_2;
-		RefreshRegionInfo_2.MinRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_2.MaxRange=FVector(AtomLifeRegionBoxRange.X*0.5,AtomLifeRegionBoxRange.Y*0.5,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_2.CentrallySymmetricRegionIndex=5;
-		RefreshRegionInfo_2.SubGuideRegionIndex.Add(1);
-		RefreshRegionInfo_2.SubGuideRegionIndex.Add(4);
-		RefreshRegionInfo_2.WeakGuideRegionIndex.Add(0);
-		RefreshRegionInfo_2.WeakGuideRegionIndex.Add(7);
-		RefreshRegionInfo_2.NonGuideRegionIndex.Add(5);
-		RefreshRegionInfo_2.NonGuideRegionIndex.Add(6);
-		RefreshRegionInfo_2.NonGuideRegionIndex.Add(3);
-		RegionInfos.Add(RefreshRegionInfo_2);
-		
-		FRefreshRegionInfo RefreshRegionInfo_3;
-		RefreshRegionInfo_3.MinRange=FVector(AtomLifeRegionBoxRange.X*-0.5,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_3.MaxRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_3.CentrallySymmetricRegionIndex=4;
-		RefreshRegionInfo_3.SubGuideRegionIndex.Add(0);
-		RefreshRegionInfo_3.SubGuideRegionIndex.Add(5);
-		RefreshRegionInfo_3.WeakGuideRegionIndex.Add(6);
-		RefreshRegionInfo_3.WeakGuideRegionIndex.Add(1);
-		RefreshRegionInfo_3.NonGuideRegionIndex.Add(2);
-		RefreshRegionInfo_3.NonGuideRegionIndex.Add(4);
-		RefreshRegionInfo_3.NonGuideRegionIndex.Add(7);
-		RegionInfos.Add(RefreshRegionInfo_3);
-		
-		FRefreshRegionInfo RefreshRegionInfo_4;
-		RefreshRegionInfo_4.MinRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_4.MaxRange=FVector(AtomLifeRegionBoxRange.X*0.5,AtomLifeRegionBoxRange.Y*1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_4.CentrallySymmetricRegionIndex=3;
-		RefreshRegionInfo_4.SubGuideRegionIndex.Add(2);
-		RefreshRegionInfo_4.SubGuideRegionIndex.Add(7);
-		RefreshRegionInfo_4.WeakGuideRegionIndex.Add(6);
-		RefreshRegionInfo_4.WeakGuideRegionIndex.Add(1);
-		RefreshRegionInfo_4.NonGuideRegionIndex.Add(0);
-		RefreshRegionInfo_4.NonGuideRegionIndex.Add(3);
-		RefreshRegionInfo_4.NonGuideRegionIndex.Add(5);
-		RegionInfos.Add(RefreshRegionInfo_4);
-		
-		FRefreshRegionInfo RefreshRegionInfo_5;
-		RefreshRegionInfo_5.MinRange=FVector(AtomLifeRegionBoxRange.X*-0.5,AtomLifeRegionBoxRange.Y*-0.5,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_5.MaxRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_5.CentrallySymmetricRegionIndex=2;
-		RefreshRegionInfo_5.SubGuideRegionIndex.Add(3);
-		RefreshRegionInfo_5.SubGuideRegionIndex.Add(6);
-		RefreshRegionInfo_5.WeakGuideRegionIndex.Add(0);
-		RefreshRegionInfo_5.WeakGuideRegionIndex.Add(7);
-		RefreshRegionInfo_5.NonGuideRegionIndex.Add(1);
-		RefreshRegionInfo_5.NonGuideRegionIndex.Add(2);
-		RefreshRegionInfo_5.NonGuideRegionIndex.Add(4);
-		RegionInfos.Add(RefreshRegionInfo_5);
-		
-		FRefreshRegionInfo RefreshRegionInfo_6;
-		RefreshRegionInfo_6.MinRange=FVector(AtomLifeRegionBoxRange.X*-1/6,AtomLifeRegionBoxRange.Y*-0.5,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_6.MaxRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_6.CentrallySymmetricRegionIndex=1;
-		RefreshRegionInfo_6.SubGuideRegionIndex.Add(5);
-		RefreshRegionInfo_6.SubGuideRegionIndex.Add(7);
-		RefreshRegionInfo_6.WeakGuideRegionIndex.Add(3);
-		RefreshRegionInfo_6.WeakGuideRegionIndex.Add(4);
-		RefreshRegionInfo_6.NonGuideRegionIndex.Add(1);
-		RefreshRegionInfo_6.NonGuideRegionIndex.Add(2);
-		RefreshRegionInfo_6.NonGuideRegionIndex.Add(0);
-		RegionInfos.Add(RefreshRegionInfo_6);
-		
-		FRefreshRegionInfo RefreshRegionInfo_7;
-		RefreshRegionInfo_7.MinRange=FVector(AtomLifeRegionBoxRange.X*1/6,AtomLifeRegionBoxRange.Y*-0.5,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_7.MaxRange=FVector(AtomLifeRegionBoxRange.X*0.5,AtomLifeRegionBoxRange.Y*-1/6,AtomLifeRegionBoxRange.Z);
-		RefreshRegionInfo_7.CentrallySymmetricRegionIndex=0;
-		RefreshRegionInfo_7.SubGuideRegionIndex.Add(4);
-		RefreshRegionInfo_7.SubGuideRegionIndex.Add(6);
-		RefreshRegionInfo_7.WeakGuideRegionIndex.Add(2);
-		RefreshRegionInfo_7.WeakGuideRegionIndex.Add(5);
-		RefreshRegionInfo_7.NonGuideRegionIndex.Add(1);
-		RefreshRegionInfo_7.NonGuideRegionIndex.Add(3);
-		RefreshRegionInfo_7.NonGuideRegionIndex.Add(0);
-		RegionInfos.Add(RefreshRegionInfo_7);
-		
-	return RegionInfos;
-	
-}
-
-uint8 AChemicalBondGameDirector::FindRegionIndexByLocation(FVector TargetLocation,  const TArray<FRefreshRegionInfo>& RefreshRegionInfos)
-{
-	
-	 for (auto RefreshRegionInfo : RefreshRegionInfos)
-	 {
-	 	uint8 Index=0;
-	 	
-		 if (TargetLocation.X>=RefreshRegionInfo.MinRange.X &&TargetLocation.Y>=RefreshRegionInfo.MinRange.Y
-		 	&& TargetLocation.X<=RefreshRegionInfo.MaxRange.X &&TargetLocation.Y<=RefreshRegionInfo.MaxRange.Y)
-		 {
-			 return Index;
-		 }
-	 	
-	 	Index++;
-	 }
-	return -1;
-}
-
-int32 AChemicalBondGameDirector::GetSpawnAtomNumInRegion(float RefreshFrequency)
-{
-	return FMath::Floor(RefreshFrequency*Cbase);
-}
-
-EAtomElementType AChemicalBondGameDirector::GetSpawnAtomTypeInRegion()
-{
-	EAtomElementType AtomElementType=EAtomElementType::C_Normal;
-	
-	// 判断成环否
-	int32 Total_W=Wnormal+Wring;
-	int32 RandomInt=FMath::RandRange(0,Total_W);
-	bool bIsNormal=true;
-	
-	if (RandomInt<=Wnormal)
-	{
-		 bIsNormal=true;
-	}
-	if (Wnormal<RandomInt && RandomInt<=Total_W)
-	{
-		 bIsNormal=false;
-	}
-	
-	//判断原子元素类型
-	Total_W=Wc+Wh+Wo+Wn+Wp;
-	RandomInt=FMath::RandRange(0,Total_W);
-	
-	if (RandomInt<=Wc)
-	{
-		return bIsNormal?EAtomElementType::C_Normal:EAtomElementType::C_Ring;
-	}
-	if (Wc<RandomInt &&RandomInt<=Wc+Wh)
-	{
-		return bIsNormal?EAtomElementType::H_Normal:EAtomElementType::H_Ring;
-	}
-	if (Wc+Wh<RandomInt &&RandomInt<=Wc+Wh+Wo)
-	{
-		return bIsNormal?EAtomElementType::O_Normal:EAtomElementType::O_Ring;
-	}
-	if (Wc+Wh+Wo<RandomInt &&RandomInt<=Wc+Wh+Wo+Wn)
-	{
-		return bIsNormal?EAtomElementType::N_Normal:EAtomElementType::N_Ring;
-	}
-	if (Wc+Wh+Wo+Wn<RandomInt &&RandomInt<=Wc+Wh+Wo+Wn+Wp)
-	{
-		return bIsNormal?EAtomElementType::P_Normal:EAtomElementType::P_Ring;
-	}
-	
-	
-	return AtomElementType;
-	
-}
-
-bool AChemicalBondGameDirector::CanSpawnAtomAtPostion(FVector Location)
-{
-	
-	APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
-	if (!PlayerPawn) return false;	
-	float Radial=GetDefault<APlaygroundAtom>()->GetProximityRadius();
-	
-	TArray<TEnumAsByte<EObjectTypeQuery>> ObjectTypes; 
-	TArray<AActor*> ActorsToIgnore; 
-	ActorsToIgnore.Add(this);
-	TArray<class AActor*> OutActors;
-	UKismetSystemLibrary::SphereOverlapActors(this,Location+PlayerPawn->GetActorLocation(),
-	Radial,ObjectTypes,AAtomBase::StaticClass(),ActorsToIgnore,OutActors);
-	
-	return OutActors.IsEmpty()?true:false;
-}
-
-FVector AChemicalBondGameDirector::FindSpawnAtomPostionOffset(uint8 regionIndex,uint8 FindNum)
-{
-	if (!RefreshRegionInfos.IsValidIndex(regionIndex)) return FVector();
-	
-	for (int i = 0; i < FindNum; ++i)
-	{
-			FVector Location=FVector::ZeroVector;
-			FVector MinRange=RefreshRegionInfos[regionIndex].MinRange;
-			FVector MaxRange=RefreshRegionInfos[regionIndex].MaxRange;
-		
-	
-			FVector ViewRangeHalf =GetViewBoxRange()/2;
-
-			/*// 排除相机视图之内的位置
-			float MaxRangeX=0;
-			if (MaxRange.X<0)
-			{
-				 MaxRangeX=FMath::Min(MaxRange.X,ViewRangeHalf.X*-1);
-			}
-			float MinRangeX=0;
-			if (MinRange.X>0)
-			{
-				MinRangeX=FMath::Max(MaxRange.X,ViewRangeHalf.X);
-			}
-		
-			float MaxRangeY=0;
-			if (MaxRange.Y<0)
-			{
-				MaxRangeY=FMath::Min(MaxRange.Y,ViewRangeHalf.Y*-1);
-			}
-			float MinRangeY=0;
-			if (MinRange.Y>0)
-			{
-				MinRangeY=FMath::Max(MinRange.Y,ViewRangeHalf.Y);
-			}
-		
-		
-			Location.X=FMath::RandRange(MinRangeX,MaxRangeX);
-			Location.Y=FMath::RandRange(MinRangeY,MaxRangeY);
-			Location.Z=MinRange.Z;*/
-		
-			Location.X=FMath::RandRange(MinRange.X,MaxRange.X);
-			Location.Y=FMath::RandRange(MinRange.Y,MaxRange.Y);
-			Location.Z=MinRange.Z;
-
-			if (CanSpawnAtomAtPostion(Location))
-			{
-				return Location; 
-			}
-		
-		
-	}
-	
-	return FVector::ZeroVector;
-}
-
-void AChemicalBondGameDirector::SpawnAtoms(int32 SpawnNum, UClass* AtomClass,int32 RegionIndex)
-{
-	
-		if (!AtomClass)
-		{
-			return;
-		}
-
-		UWorld* World = GetWorld();
-		if (!World)
-		{
-			return;
-		}
-
-		APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
-		if (!PlayerPawn) return;	
-	
-		for (int32 Index = 0; Index < SpawnNum; ++Index)
-		{
-			
-			const FVector SpawnLocation = FindSpawnAtomPostionOffset(RegionIndex,10)+PlayerPawn->GetActorLocation();
-			if (SpawnLocation==FVector::ZeroVector) return ;
-			
-			const FRotator SpawnRotation(0.f, FMath::RandRange(0.f, 360.f), 0.f);
-			const FTransform SpawnTransform(SpawnRotation, SpawnLocation);
-
-			APlaygroundAtom* Atom = World->SpawnActorDeferred<APlaygroundAtom>(
-				AtomClass,
-				SpawnTransform,
-				this,
-				nullptr,
-				ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-			if (!Atom)
-			{
-				continue;
-			}
-
-			EAtomElementType  AtomElementType=GetSpawnAtomTypeInRegion();
-			Atom->ConfigurePlaygroundAtom(AtomElementType);
-			Atom->FinishSpawning(SpawnTransform);
-			SpawnAtom(Atom);
-
-			// 添加力
-			if (UFluidMotionComponent* FluidMotion = Atom->GetFluidMotionComponent())
-			{
-				const FVector ImpulseDirection(
-					FMath::RandRange(-1.f, 1.f),
-					FMath::RandRange(-1.f, 1.f),
-					0.f);
-				FluidMotion->AddLinearImpulse(ImpulseDirection.GetSafeNormal() * 260.f);
-			}
-		}
-		
-	GEngine->AddOnScreenDebugMessage(-1,3,FColor::MakeRandomColor(),
-		FString::Printf(TEXT("区域%d :生成原子%d 个"),RegionIndex,SpawnNum));
-	
-	}
-
-TArray<APlaygroundAtom*> AChemicalBondGameDirector::GetAllAtomsOutLifeRange()
-{
-	TArray<APlaygroundAtom*> PlaygroundAtoms;
-	 TArray<AActor*> OutActorsPlaygroundAtoms;
-	UGameplayStatics::GetAllActorsOfClass(this ,APlaygroundAtom::StaticClass(),OutActorsPlaygroundAtoms);
-	 APawn* PlayerPawn=UGameplayStatics::GetPlayerPawn(this,0);
-	if (!PlayerPawn) return PlaygroundAtoms;
-	FVector PlayerLocation=PlayerPawn->GetActorLocation();
-	FVector	AtomLifeRegionBoxRangeHalf=GetAtomLifeRegionBoxRange()/2;
-	
-	for (AActor* Actor : OutActorsPlaygroundAtoms)
-	{
-		if (!Actor) continue;
-		APlaygroundAtom* PlaygroundAtom=Cast<APlaygroundAtom>(Actor);
-		if (!PlaygroundAtom) continue;
-		
-		 FVector Location=PlaygroundAtom->GetActorLocation();
-		FVector Distance=Location-PlayerLocation;
-		
-		if (FMath::Abs(Distance.X)>AtomLifeRegionBoxRangeHalf.X ||
-			FMath::Abs(Distance.Y)>AtomLifeRegionBoxRangeHalf.Y)
-		{
-			PlaygroundAtoms.Add(PlaygroundAtom);
-		}
-		
-	}
-	return PlaygroundAtoms;
-
-}
-
-
-void AChemicalBondGameDirector::SpawnAtomInAllRegions()
-{
-	int32 MainGuideRegionSpawnNum=GetSpawnAtomNumInRegion(MainGuideRefreshFrequency);
-	int32 SubGuideRegionSpawnNum=GetSpawnAtomNumInRegion(SubGuideRefreshFrequency);
-	int32 WeakGuideRegionSpawnNum=GetSpawnAtomNumInRegion(WeakGuideRefreshFrequency);
-	int32 NonGuideRegionSpawnNum=GetSpawnAtomNumInRegion(NoneGuideRefreshFrequency);
-	
-	FRefreshRegionInfo CurrentMainGuideRegionInfo=GetCurrentMainGuideRegionInfo();
-	
-
-	
-	
-		// 主区域
-	SpawnAtoms(MainGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideIndex);
-
-		// 次区域
-	SpawnAtoms(SubGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.SubGuideRegionIndex[0]);
-	SpawnAtoms(SubGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.SubGuideRegionIndex[1]);
-	
-		// 弱相关区域
-	SpawnAtoms(WeakGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.WeakGuideRegionIndex[0]);
-	SpawnAtoms(WeakGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.WeakGuideRegionIndex[1]);
-	
-		// 无相关区域生成
-	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[0]);
-	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[1]);
-	SpawnAtoms(NonGuideRegionSpawnNum,APlaygroundAtom::StaticClass(),CurrentMainGuideRegionInfo.NonGuideRegionIndex[2]);
-	
-	
-	TArray<APlaygroundAtom*>PlaygroundAtoms= GetAllAtomsOutLifeRange();
-	if (!PlaygroundAtoms.IsEmpty())
-	{
-		for (APlaygroundAtom* Atom : PlaygroundAtoms)
-		{
-			if (Atom)
-			{
-				TerminateAtom(Atom);
-				//Atom->Destroy();
-			}
-	
-		}
-	
-	}
-	
-		
-
-}
-
 
 void AChemicalBondGameDirector::BindAtomConnectionEvents(AAtomBase* Atom)
 {
@@ -2074,6 +1831,447 @@ void AChemicalBondGameDirector::RefreshAtomBondLayouts(AAtomBase* AtomA, AAtomBa
 	if (AtomB)
 	{
 		AtomB->NotifyBondLayoutChanged();
+	}
+}
+
+void AChemicalBondGameDirector::UpdateInteractionRangeFillVisual()
+{
+	if (!InteractionRangeFillMesh)
+	{
+		return;
+	}
+
+	if (!bEnableInteractionRangeFillVisual)
+	{
+		InteractionRangeFillMesh->ClearAllMeshSections();
+		InteractionRangeFillMesh->SetVisibility(false, true);
+		return;
+	}
+
+	struct FRangeFillCircle
+	{
+		FVector2D Center = FVector2D::ZeroVector;
+		float Radius = 0.f;
+		EAtomInteractionRangeVisualState VisualState = EAtomInteractionRangeVisualState::FreeAvailable;
+	};
+
+	struct FRangeFillAngleInterval
+	{
+		float Start = 0.f;
+		float End = 0.f;
+	};
+
+	TArray<FRangeFillCircle> FillCircles;
+	FBox2D FillBounds(ForceInit);
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		AAtomBase* Atom = AtomPair.Value.Get();
+		if (!Atom)
+		{
+			continue;
+		}
+
+		const EAtomInteractionRangeVisualState VisualState = Atom->GetInteractionRangeVisualState();
+		if (VisualState == EAtomInteractionRangeVisualState::NotApplicable)
+		{
+			continue;
+		}
+
+		const float Radius = FMath::Max(Atom->GetProximityRadius(), 0.f);
+		if (Radius <= KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		const FVector Location = ChemicalBondGameplayPlane::ProjectLocation(Atom->GetActorLocation());
+		FRangeFillCircle Circle;
+		Circle.Center = FVector2D(Location.X, Location.Y);
+		Circle.Radius = Radius;
+		Circle.VisualState = VisualState;
+		FillCircles.Add(Circle);
+
+		FillBounds += Circle.Center - FVector2D(Radius, Radius);
+		FillBounds += Circle.Center + FVector2D(Radius, Radius);
+	}
+
+	if (FillCircles.IsEmpty() || !FillBounds.bIsValid)
+	{
+		InteractionRangeFillMesh->ClearAllMeshSections();
+		InteractionRangeFillMesh->SetVisibility(false, true);
+		return;
+	}
+
+	const float SegmentLength = FMath::Max(InteractionRangeFillBoundarySegmentLength, 2.f);
+	const float BoundaryZ = InteractionRangeFillZOffset + 1.f;
+	const float BoundaryThickness = FMath::Max(InteractionRangeBoundaryThickness, 0.f);
+	UWorld* World = GetWorld();
+	constexpr float TwoPi = 2.f * UE_PI;
+	auto GetInteractionRangeVisualColor = [this](EAtomInteractionRangeVisualState VisualState)
+	{
+		switch (VisualState)
+		{
+		case EAtomInteractionRangeVisualState::Unavailable:
+			return UnavailableInteractionRangeColor;
+		case EAtomInteractionRangeVisualState::PlayerGroupAvailable:
+			return InteractionRangeFillColor;
+		case EAtomInteractionRangeVisualState::FreeAvailable:
+		default:
+			return FreeAtomInteractionRangeColor;
+		}
+	};
+
+	auto GetComponentVisualColor = [&FillCircles, &GetInteractionRangeVisualColor](const TArray<int32>& Component)
+	{
+		EAtomInteractionRangeVisualState SelectedState = EAtomInteractionRangeVisualState::FreeAvailable;
+		for (const int32 CircleIndex : Component)
+		{
+			const EAtomInteractionRangeVisualState VisualState = FillCircles[CircleIndex].VisualState;
+			if (VisualState == EAtomInteractionRangeVisualState::PlayerGroupAvailable)
+			{
+				SelectedState = VisualState;
+				break;
+			}
+			if (VisualState == EAtomInteractionRangeVisualState::Unavailable)
+			{
+				SelectedState = VisualState;
+			}
+		}
+		return GetInteractionRangeVisualColor(SelectedState);
+	};
+
+	auto NormalizeAngle = [](float Angle)
+	{
+		float Result = FMath::Fmod(Angle, TwoPi);
+		if (Result < 0.f)
+		{
+			Result += TwoPi;
+		}
+		return Result;
+	};
+
+	TArray<FVector> Vertices;
+	TArray<int32> Triangles;
+	TArray<FVector> Normals;
+	TArray<FVector2D> UVs;
+	TArray<FLinearColor> VertexColors;
+	TArray<FProcMeshTangent> Tangents;
+
+	Vertices.Reserve(FillCircles.Num() * 128);
+	Triangles.Reserve(FillCircles.Num() * 384);
+	Normals.Reserve(FillCircles.Num() * 128);
+	UVs.Reserve(FillCircles.Num() * 128);
+	VertexColors.Reserve(FillCircles.Num() * 128);
+	Tangents.Reserve(FillCircles.Num() * 128);
+
+	TArray<int32> ComponentIds;
+	ComponentIds.Init(INDEX_NONE, FillCircles.Num());
+	TArray<TArray<int32>> Components;
+	for (int32 CircleIndex = 0; CircleIndex < FillCircles.Num(); ++CircleIndex)
+	{
+		if (ComponentIds[CircleIndex] != INDEX_NONE)
+		{
+			continue;
+		}
+
+		TArray<int32> Component;
+		TArray<int32> Queue;
+		Queue.Add(CircleIndex);
+		ComponentIds[CircleIndex] = Components.Num();
+		for (int32 QueueIndex = 0; QueueIndex < Queue.Num(); ++QueueIndex)
+		{
+			const int32 CurrentIndex = Queue[QueueIndex];
+			Component.Add(CurrentIndex);
+			const FRangeFillCircle& CurrentCircle = FillCircles[CurrentIndex];
+			for (int32 OtherIndex = 0; OtherIndex < FillCircles.Num(); ++OtherIndex)
+			{
+				if (ComponentIds[OtherIndex] != INDEX_NONE)
+				{
+					continue;
+				}
+
+				const FRangeFillCircle& OtherCircle = FillCircles[OtherIndex];
+				const float Distance = FVector2D::Distance(CurrentCircle.Center, OtherCircle.Center);
+				if (Distance <= CurrentCircle.Radius + OtherCircle.Radius)
+				{
+					ComponentIds[OtherIndex] = Components.Num();
+					Queue.Add(OtherIndex);
+				}
+			}
+		}
+		Components.Add(Component);
+	}
+
+	const FTransform ComponentTransform = InteractionRangeFillMesh->GetComponentTransform();
+	for (const TArray<int32>& Component : Components)
+	{
+		if (Component.IsEmpty())
+		{
+			continue;
+		}
+
+		FVector2D ComponentCenter = FVector2D::ZeroVector;
+		float ComponentRadius = 0.f;
+		const FLinearColor ComponentVisualColor = GetComponentVisualColor(Component);
+		for (const int32 CircleIndex : Component)
+		{
+			const FRangeFillCircle& Circle = FillCircles[CircleIndex];
+			ComponentCenter += Circle.Center;
+			ComponentRadius = FMath::Max(ComponentRadius, Circle.Radius);
+		}
+		ComponentCenter /= static_cast<float>(Component.Num());
+
+		TArray<FVector2D> BoundaryPoints;
+		for (const int32 CircleIndex : Component)
+		{
+			const FRangeFillCircle& Circle = FillCircles[CircleIndex];
+			TArray<FRangeFillAngleInterval> CoveredIntervals;
+			bool bFullyCovered = false;
+
+			for (const int32 OtherIndex : Component)
+			{
+				if (OtherIndex == CircleIndex)
+				{
+					continue;
+				}
+
+				const FRangeFillCircle& OtherCircle = FillCircles[OtherIndex];
+				const FVector2D ToOther = OtherCircle.Center - Circle.Center;
+				const float Distance = ToOther.Size();
+				if (Distance <= KINDA_SMALL_NUMBER)
+				{
+					if (OtherCircle.Radius >= Circle.Radius)
+					{
+						bFullyCovered = true;
+						break;
+					}
+					continue;
+				}
+
+				if (Distance + Circle.Radius <= OtherCircle.Radius + KINDA_SMALL_NUMBER)
+				{
+					bFullyCovered = true;
+					break;
+				}
+
+				if (Distance >= Circle.Radius + OtherCircle.Radius || Distance + OtherCircle.Radius <= Circle.Radius)
+				{
+					continue;
+				}
+
+				const float BaseAngle = FMath::Atan2(ToOther.Y, ToOther.X);
+				const float CoverageCosine = FMath::Clamp(
+					(FMath::Square(Circle.Radius) + FMath::Square(Distance) - FMath::Square(OtherCircle.Radius)) /
+						(2.f * Circle.Radius * Distance),
+					-1.f,
+					1.f);
+				const float CoverageAngle = FMath::Acos(CoverageCosine);
+				float Start = BaseAngle - CoverageAngle;
+				float End = BaseAngle + CoverageAngle;
+				while (Start < 0.f)
+				{
+					Start += TwoPi;
+					End += TwoPi;
+				}
+				while (Start >= TwoPi)
+				{
+					Start -= TwoPi;
+					End -= TwoPi;
+				}
+
+				if (End > TwoPi)
+				{
+					CoveredIntervals.Add({Start, TwoPi});
+					CoveredIntervals.Add({0.f, End - TwoPi});
+				}
+				else
+				{
+					CoveredIntervals.Add({Start, End});
+				}
+			}
+
+			if (bFullyCovered)
+			{
+				continue;
+			}
+
+			CoveredIntervals.Sort([](const FRangeFillAngleInterval& Left, const FRangeFillAngleInterval& Right)
+			{
+				return Left.Start < Right.Start;
+			});
+
+			TArray<FRangeFillAngleInterval> MergedIntervals;
+			for (const FRangeFillAngleInterval& Interval : CoveredIntervals)
+			{
+				if (Interval.End <= Interval.Start)
+				{
+					continue;
+				}
+
+				if (MergedIntervals.IsEmpty() || Interval.Start > MergedIntervals.Last().End)
+				{
+					MergedIntervals.Add(Interval);
+				}
+				else
+				{
+					MergedIntervals.Last().End = FMath::Max(MergedIntervals.Last().End, Interval.End);
+				}
+			}
+
+			TArray<FRangeFillAngleInterval> ExposedIntervals;
+			if (MergedIntervals.IsEmpty())
+			{
+				ExposedIntervals.Add({0.f, TwoPi});
+			}
+			else
+			{
+				float Cursor = 0.f;
+				for (const FRangeFillAngleInterval& Interval : MergedIntervals)
+				{
+					if (Interval.Start > Cursor)
+					{
+						ExposedIntervals.Add({Cursor, Interval.Start});
+					}
+					Cursor = FMath::Max(Cursor, Interval.End);
+				}
+				if (Cursor < TwoPi)
+				{
+					ExposedIntervals.Add({Cursor, TwoPi});
+				}
+			}
+
+			for (const FRangeFillAngleInterval& ExposedInterval : ExposedIntervals)
+			{
+				const float ArcLength = (ExposedInterval.End - ExposedInterval.Start) * Circle.Radius;
+				const int32 SegmentCount = FMath::Clamp(FMath::CeilToInt(ArcLength / SegmentLength), 8, 192);
+				FVector2D PreviousBoundaryPoint = FVector2D::ZeroVector;
+				bool bHasPreviousBoundaryPoint = false;
+				for (int32 SegmentIndex = 0; SegmentIndex <= SegmentCount; ++SegmentIndex)
+				{
+					const float Alpha = static_cast<float>(SegmentIndex) / static_cast<float>(SegmentCount);
+					const float Angle = FMath::Lerp(ExposedInterval.Start, ExposedInterval.End, Alpha);
+					const FVector2D BoundaryPoint =
+						Circle.Center + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * Circle.Radius;
+					BoundaryPoints.Add(BoundaryPoint);
+					if (bEnableInteractionRangeBoundaryVisual && World && bHasPreviousBoundaryPoint)
+					{
+						const FLinearColor BoundaryLinearColor = GetInteractionRangeVisualColor(Circle.VisualState);
+						DrawDebugLine(
+							World,
+							FVector(PreviousBoundaryPoint.X, PreviousBoundaryPoint.Y, BoundaryZ),
+							FVector(BoundaryPoint.X, BoundaryPoint.Y, BoundaryZ),
+							BoundaryLinearColor.ToFColor(true),
+							false,
+							0.f,
+							0,
+							BoundaryThickness);
+					}
+					PreviousBoundaryPoint = BoundaryPoint;
+					bHasPreviousBoundaryPoint = true;
+				}
+			}
+		}
+
+		if (BoundaryPoints.Num() < 3)
+		{
+			continue;
+		}
+
+		BoundaryPoints.Sort([&ComponentCenter, NormalizeAngle](const FVector2D& Left, const FVector2D& Right)
+		{
+			const float LeftAngle = NormalizeAngle(FMath::Atan2(Left.Y - ComponentCenter.Y, Left.X - ComponentCenter.X));
+			const float RightAngle = NormalizeAngle(FMath::Atan2(Right.Y - ComponentCenter.Y, Right.X - ComponentCenter.X));
+			return LeftAngle < RightAngle;
+		});
+
+		TArray<FVector2D> UniqueBoundaryPoints;
+		UniqueBoundaryPoints.Reserve(BoundaryPoints.Num());
+		for (const FVector2D& BoundaryPoint : BoundaryPoints)
+		{
+			if (UniqueBoundaryPoints.IsEmpty() ||
+				FVector2D::DistSquared(UniqueBoundaryPoints.Last(), BoundaryPoint) > FMath::Square(1.f))
+			{
+				UniqueBoundaryPoints.Add(BoundaryPoint);
+			}
+		}
+		if (UniqueBoundaryPoints.Num() >= 2 &&
+			FVector2D::DistSquared(UniqueBoundaryPoints[0], UniqueBoundaryPoints.Last()) <= FMath::Square(1.f))
+		{
+			UniqueBoundaryPoints.Pop();
+		}
+		if (UniqueBoundaryPoints.Num() < 3)
+		{
+			continue;
+		}
+
+		const int32 CenterIndex = Vertices.Num();
+		const FVector WorldCenter(ComponentCenter.X, ComponentCenter.Y, InteractionRangeFillZOffset);
+		Vertices.Add(ComponentTransform.InverseTransformPosition(WorldCenter));
+		Normals.Add(FVector::UpVector);
+		UVs.Add(FVector2D(0.5f, 0.5f));
+		VertexColors.Add(ComponentVisualColor);
+		Tangents.Add(FProcMeshTangent(1.f, 0.f, 0.f));
+
+		const int32 BoundaryStartIndex = Vertices.Num();
+		for (const FVector2D& BoundaryPoint : UniqueBoundaryPoints)
+		{
+			const FVector WorldPoint(BoundaryPoint.X, BoundaryPoint.Y, InteractionRangeFillZOffset);
+			Vertices.Add(ComponentTransform.InverseTransformPosition(WorldPoint));
+			Normals.Add(FVector::UpVector);
+			UVs.Add((BoundaryPoint - ComponentCenter) / FMath::Max(ComponentRadius * 2.f, 1.f) + FVector2D(0.5f, 0.5f));
+			VertexColors.Add(ComponentVisualColor);
+			Tangents.Add(FProcMeshTangent(1.f, 0.f, 0.f));
+		}
+
+		for (int32 BoundaryIndex = 0; BoundaryIndex < UniqueBoundaryPoints.Num(); ++BoundaryIndex)
+		{
+			const int32 FirstIndex = BoundaryStartIndex + BoundaryIndex;
+			const int32 SecondIndex = BoundaryStartIndex + ((BoundaryIndex + 1) % UniqueBoundaryPoints.Num());
+			Triangles.Add(CenterIndex);
+			Triangles.Add(FirstIndex);
+			Triangles.Add(SecondIndex);
+			Triangles.Add(SecondIndex);
+			Triangles.Add(FirstIndex);
+			Triangles.Add(CenterIndex);
+		}
+	}
+
+	if (Vertices.IsEmpty())
+	{
+		InteractionRangeFillMesh->ClearAllMeshSections();
+		InteractionRangeFillMesh->SetVisibility(false, true);
+		return;
+	}
+
+	if (InteractionRangeFillMaterialInstance)
+	{
+		InteractionRangeFillMaterialInstance->SetVectorParameterValue(FName(TEXT("Color")), InteractionRangeFillColor);
+		InteractionRangeFillMaterialInstance->SetVectorParameterValue(FName(TEXT("BaseColor")), InteractionRangeFillColor);
+		InteractionRangeFillMaterialInstance->SetVectorParameterValue(FName(TEXT("TintColor")), InteractionRangeFillColor);
+		InteractionRangeFillMaterialInstance->SetScalarParameterValue(FName(TEXT("Opacity")), InteractionRangeFillColor.A);
+	}
+
+	InteractionRangeFillMesh->CreateMeshSection_LinearColor(
+		0,
+		Vertices,
+		Triangles,
+		Normals,
+		UVs,
+		VertexColors,
+		Tangents,
+		false);
+	InteractionRangeFillMesh->SetVisibility(true, true);
+
+	if (!bLoggedInteractionRangeFillVisual)
+	{
+		bLoggedInteractionRangeFillVisual = true;
+		UE_LOG(LogChemicalBondDirector, Warning,
+			TEXT("[Game:Presentation] Interaction range fill generated. CircleCount=%d ComponentCount=%d VertexCount=%d TriangleCount=%d SegmentLength=%.2f Material=%s"),
+			FillCircles.Num(),
+			Components.Num(),
+			Vertices.Num(),
+			Triangles.Num() / 3,
+			SegmentLength,
+			*GetNameSafe(InteractionRangeFillMesh->GetMaterial(0)));
 	}
 }
 
@@ -3099,6 +3297,448 @@ void AChemicalBondGameDirector::ReleaseDecisionPair(const FAtomInteractionPairKe
 	ConnectionCandidates.Remove(PairKey);
 }
 
+void AChemicalBondGameDirector::InitializeRefreshRuntime()
+{
+	CurrentMainGuideRegion = FMath::RandRange(0, 7);
+	RefreshTimeRemaining = FMath::FRandRange(
+		FMath::Min(RefreshIntervalMin, RefreshIntervalMax),
+		FMath::Max(RefreshIntervalMin, RefreshIntervalMax));
+	GuideTimeRemaining = FMath::FRandRange(
+		FMath::Min(GuideIntervalMin, GuideIntervalMax),
+		FMath::Max(GuideIntervalMin, GuideIntervalMax));
+
+	UE_LOG(LogChemicalBondDirector, Log,
+		TEXT("[Game:Refresh] Runtime initialized. MainGuide=%d RefreshIn=%.2f GuideIn=%.2f"),
+		CurrentMainGuideRegion,
+		RefreshTimeRemaining,
+		GuideTimeRemaining);
+}
+
+void AChemicalBondGameDirector::ProcessSceneRefresh(float DeltaSeconds)
+{
+	if (DeltaSeconds <= 0.f)
+	{
+		return;
+	}
+
+	ProcessLifeSpanRecycling();
+	ProcessRefreshGuide(DeltaSeconds);
+
+	RefreshTimeRemaining -= DeltaSeconds;
+	if (RefreshTimeRemaining > 0.f)
+	{
+		return;
+	}
+
+	ExecuteGlobalRefresh();
+	RefreshTimeRemaining = FMath::FRandRange(
+		FMath::Min(RefreshIntervalMin, RefreshIntervalMax),
+		FMath::Max(RefreshIntervalMin, RefreshIntervalMax));
+}
+
+void AChemicalBondGameDirector::ProcessRefreshGuide(float DeltaSeconds)
+{
+	if (CurrentMainGuideRegion == INDEX_NONE)
+	{
+		CurrentMainGuideRegion = FMath::RandRange(0, 7);
+	}
+
+	GuideTimeRemaining -= DeltaSeconds;
+	if (GuideTimeRemaining > 0.f)
+	{
+		return;
+	}
+
+	const int32 PreviousRegion = GetPreviousGuideRegion(CurrentMainGuideRegion);
+	const int32 NextRegion = GetNextGuideRegion(CurrentMainGuideRegion);
+	const int32 PreviousOpposite = GetOppositeGuideRegion(PreviousRegion);
+	const int32 NextOpposite = GetOppositeGuideRegion(NextRegion);
+	const int32 PreviousOppositeCount = CountFreeAtomsInRegion(PreviousOpposite);
+	const int32 NextOppositeCount = CountFreeAtomsInRegion(NextOpposite);
+
+	if (PreviousOppositeCount != NextOppositeCount)
+	{
+		CurrentMainGuideRegion =
+			PreviousOppositeCount > NextOppositeCount
+				? GetOppositeGuideRegion(PreviousOpposite)
+				: GetOppositeGuideRegion(NextOpposite);
+	}
+
+	GuideTimeRemaining = FMath::FRandRange(
+		FMath::Min(GuideIntervalMin, GuideIntervalMax),
+		FMath::Max(GuideIntervalMin, GuideIntervalMax));
+
+	UE_LOG(LogChemicalBondDirector, Log,
+		TEXT("[Game:Refresh] Guide updated. MainGuide=%d Counts=(%d:%d,%d:%d) NextGuideIn=%.2f"),
+		CurrentMainGuideRegion,
+		PreviousOpposite,
+		PreviousOppositeCount,
+		NextOpposite,
+		NextOppositeCount,
+		GuideTimeRemaining);
+}
+
+void AChemicalBondGameDirector::ProcessLifeSpanRecycling()
+{
+	PruneStaleAtomRegistryEntries();
+
+	FRefreshRangeFrame Frame;
+	if (!TryBuildRefreshRangeFrame(this, Frame))
+	{
+		return;
+	}
+
+	TArray<TPair<FGuid, AAtomBase*>> AtomsToRecycle;
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		AAtomBase* Atom = AtomPair.Value.Get();
+		if (!Atom || Atom->IsPlayerControlled() || Atom->GetAtomState() != EAtomState::Free)
+		{
+			continue;
+		}
+
+		const FVector2D LocalLocation = Frame.ToLocal2D(Atom->GetActorLocation());
+		const bool bInsideLifeSpan =
+			FMath::Abs(LocalLocation.X) <= Frame.LifeSpanHalfExtent.X
+			&& FMath::Abs(LocalLocation.Y) <= Frame.LifeSpanHalfExtent.Y;
+		if (!bInsideLifeSpan)
+		{
+			AtomsToRecycle.Add(TPair<FGuid, AAtomBase*>(AtomPair.Key, Atom));
+		}
+	}
+
+	for (const TPair<FGuid, AAtomBase*>& RecyclePair : AtomsToRecycle)
+	{
+		TerminateAtomByUid(RecyclePair.Key);
+		if (RecyclePair.Value)
+		{
+			RecyclePair.Value->Destroy();
+		}
+	}
+}
+
+void AChemicalBondGameDirector::ExecuteGlobalRefresh()
+{
+	if (!RefreshAtomClass)
+	{
+		UE_LOG(LogChemicalBondDirector, Warning, TEXT("[Game:Refresh] Refresh skipped because RefreshAtomClass is null."));
+		return;
+	}
+
+	int32 FreeAtomCount = CountFreeAtomsInLogicRange();
+	if (FreeAtomCount >= TargetFreeAtomCount)
+	{
+		return;
+	}
+
+	for (int32 RegionIndex = 0; RegionIndex < 8; ++RegionIndex)
+	{
+		const int32 SpawnCount = FMath::FloorToInt(RefreshBaseCount * GetRefreshCoefficientForRegion(RegionIndex));
+		for (int32 SpawnIndex = 0; SpawnIndex < SpawnCount && FreeAtomCount < TargetFreeAtomCount; ++SpawnIndex)
+		{
+			if (TrySpawnRefreshAtomInRegion(RegionIndex))
+			{
+				++FreeAtomCount;
+			}
+		}
+	}
+}
+
+bool AChemicalBondGameDirector::TrySpawnRefreshAtomInRegion(int32 RegionIndex)
+{
+	UWorld* World = GetWorld();
+	if (!World || !RefreshAtomClass)
+	{
+		return false;
+	}
+
+	FRefreshRangeFrame Frame;
+	if (!TryBuildRefreshRangeFrame(this, Frame))
+	{
+		return false;
+	}
+
+	FVector2D RegionMin;
+	FVector2D RegionMax;
+	if (!GetRefreshRegionBounds(RegionIndex, RegionMin, RegionMax))
+	{
+		return false;
+	}
+
+	const EAtomElementType ElementType = PickRefreshElementType();
+	const float SpawnProximityRadius = GetRefreshElementProximityRadius(ElementType);
+	for (int32 AttemptIndex = 0; AttemptIndex < SpawnPlacementAttempts; ++AttemptIndex)
+	{
+		const FVector2D LocalSpawnLocation(
+			FMath::FRandRange(RegionMin.X, RegionMax.X),
+			FMath::FRandRange(RegionMin.Y, RegionMax.Y));
+		const FVector SpawnLocation = Frame.ToWorld(LocalSpawnLocation);
+		if (!IsSpawnLocationLegal(SpawnLocation, SpawnProximityRadius))
+		{
+			continue;
+		}
+
+		const FRotator SpawnRotation(0.f, FMath::FRandRange(0.f, 360.f), 0.f);
+		const FTransform SpawnTransform(SpawnRotation, SpawnLocation);
+		AAtomBase* SpawnedAtom = World->SpawnActorDeferred<AAtomBase>(
+			RefreshAtomClass,
+			SpawnTransform,
+			this,
+			nullptr,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (!SpawnedAtom)
+		{
+			return false;
+		}
+
+		SpawnedAtom->ConfigureElementType(ElementType);
+		SpawnedAtom->FinishSpawning(SpawnTransform);
+		SpawnAtom(SpawnedAtom);
+		ApplySpawnInitialImpulse(SpawnedAtom, Frame.Center);
+		return true;
+	}
+
+	return false;
+}
+
+EAtomElementType AChemicalBondGameDirector::PickRefreshElementType() const
+{
+	static constexpr EAtomElementType RefreshElements[] =
+	{
+		EAtomElementType::H,
+		EAtomElementType::H_Normal,
+		EAtomElementType::C_Normal,
+		EAtomElementType::C_Ring,
+		EAtomElementType::O_Normal,
+		EAtomElementType::O_Ring,
+		EAtomElementType::N_Normal,
+		EAtomElementType::N_Ring,
+		EAtomElementType::P_Normal,
+		EAtomElementType::P_Ring
+	};
+
+	return RefreshElements[FMath::RandHelper(UE_ARRAY_COUNT(RefreshElements))];
+}
+
+void AChemicalBondGameDirector::ApplySpawnInitialImpulse(AAtomBase* SpawnedAtom, const FVector& PlayerLocation)
+{
+	if (!SpawnedAtom)
+	{
+		return;
+	}
+
+	UFluidMotionComponent* FluidMotionComponent = SpawnedAtom->GetFluidMotionComponent();
+	if (!FluidMotionComponent)
+	{
+		return;
+	}
+
+	const bool bUseDirectedImpulse = FMath::FRand() < FMath::Clamp(DirectedSpawnRate, 0.f, 1.f);
+	FVector Direction = FVector::ZeroVector;
+	float MinImpulse = 0.f;
+	float MaxImpulse = 0.f;
+	if (bUseDirectedImpulse)
+	{
+		Direction = ChemicalBondGameplayPlane::ProjectVector(PlayerLocation - SpawnedAtom->GetActorLocation()).GetSafeNormal();
+		MinImpulse = DirectedSpawnImpulseMin;
+		MaxImpulse = DirectedSpawnImpulseMax;
+	}
+	else
+	{
+		Direction = MakePlanarDirectionFromYaw(FMath::FRandRange(0.f, 360.f));
+		MinImpulse = RandomSpawnImpulseMin;
+		MaxImpulse = RandomSpawnImpulseMax;
+	}
+
+	if (Direction.IsNearlyZero())
+	{
+		Direction = FVector::ForwardVector;
+	}
+
+	const float ImpulseMagnitude = FMath::FRandRange(FMath::Min(MinImpulse, MaxImpulse), FMath::Max(MinImpulse, MaxImpulse));
+	FluidMotionComponent->AddLinearImpulse(Direction * ImpulseMagnitude);
+}
+
+int32 AChemicalBondGameDirector::CountFreeAtomsInLogicRange() const
+{
+	FRefreshRangeFrame Frame;
+	if (!TryBuildRefreshRangeFrame(this, Frame))
+	{
+		return 0;
+	}
+
+	int32 Count = 0;
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		const AAtomBase* Atom = AtomPair.Value.Get();
+		if (!Atom || Atom->IsPlayerControlled() || Atom->GetAtomState() != EAtomState::Free)
+		{
+			continue;
+		}
+
+		const FVector2D LocalLocation = Frame.ToLocal2D(Atom->GetActorLocation());
+		if (FMath::Abs(LocalLocation.X) <= Frame.LogicHalfExtent.X
+			&& FMath::Abs(LocalLocation.Y) <= Frame.LogicHalfExtent.Y)
+		{
+			++Count;
+		}
+	}
+
+	return Count;
+}
+
+int32 AChemicalBondGameDirector::CountFreeAtomsInRegion(int32 RegionIndex) const
+{
+	FRefreshRangeFrame Frame;
+	if (!TryBuildRefreshRangeFrame(this, Frame))
+	{
+		return 0;
+	}
+
+	FVector2D RegionMin;
+	FVector2D RegionMax;
+	if (!GetRefreshRegionBounds(RegionIndex, RegionMin, RegionMax))
+	{
+		return 0;
+	}
+
+	int32 Count = 0;
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		const AAtomBase* Atom = AtomPair.Value.Get();
+		if (!Atom || Atom->IsPlayerControlled() || Atom->GetAtomState() != EAtomState::Free)
+		{
+			continue;
+		}
+
+		const FVector2D LocalLocation = Frame.ToLocal2D(Atom->GetActorLocation());
+		if (LocalLocation.X >= RegionMin.X && LocalLocation.X <= RegionMax.X
+			&& LocalLocation.Y >= RegionMin.Y && LocalLocation.Y <= RegionMax.Y)
+		{
+			++Count;
+		}
+	}
+
+	return Count;
+}
+
+float AChemicalBondGameDirector::GetRefreshCoefficientForRegion(int32 RegionIndex) const
+{
+	if (RegionIndex == CurrentMainGuideRegion)
+	{
+		return MainGuideRefreshCoefficient;
+	}
+
+	if (RegionIndex == GetPreviousGuideRegion(CurrentMainGuideRegion)
+		|| RegionIndex == GetNextGuideRegion(CurrentMainGuideRegion))
+	{
+		return SubGuideRefreshCoefficient;
+	}
+
+	if (RegionIndex == GetPreviousGuideRegion(GetPreviousGuideRegion(CurrentMainGuideRegion))
+		|| RegionIndex == GetNextGuideRegion(GetNextGuideRegion(CurrentMainGuideRegion)))
+	{
+		return WeakGuideRefreshCoefficient;
+	}
+
+	return NoneGuideRefreshCoefficient;
+}
+
+int32 AChemicalBondGameDirector::GetPreviousGuideRegion(int32 RegionIndex) const
+{
+	return (FMath::Clamp(RegionIndex, 0, 7) + 7) % 8;
+}
+
+int32 AChemicalBondGameDirector::GetNextGuideRegion(int32 RegionIndex) const
+{
+	return (FMath::Clamp(RegionIndex, 0, 7) + 1) % 8;
+}
+
+int32 AChemicalBondGameDirector::GetOppositeGuideRegion(int32 RegionIndex) const
+{
+	return 7 - FMath::Clamp(RegionIndex, 0, 7);
+}
+
+bool AChemicalBondGameDirector::GetRefreshRegionBounds(int32 RegionIndex, FVector2D& OutMin, FVector2D& OutMax) const
+{
+	FRefreshRangeFrame Frame;
+	if (!TryBuildRefreshRangeFrame(this, Frame) || RegionIndex < 0 || RegionIndex > 7)
+	{
+		return false;
+	}
+
+	static constexpr int32 RegionRows[] = { 0, 0, 0, 1, 1, 2, 2, 2 };
+	static constexpr int32 RegionColumns[] = { 0, 1, 2, 0, 2, 0, 1, 2 };
+	const int32 Row = RegionRows[RegionIndex];
+	const int32 Column = RegionColumns[RegionIndex];
+
+	const float X0 = -Frame.LifeSpanHalfExtent.X;
+	const float X1 = -Frame.LifeSpanHalfExtent.X / 3.f;
+	const float X2 = Frame.LifeSpanHalfExtent.X / 3.f;
+	const float X3 = Frame.LifeSpanHalfExtent.X;
+	const float Y0 = Frame.LifeSpanHalfExtent.Y;
+	const float Y1 = Frame.LifeSpanHalfExtent.Y / 3.f;
+	const float Y2 = -Frame.LifeSpanHalfExtent.Y / 3.f;
+	const float Y3 = -Frame.LifeSpanHalfExtent.Y;
+
+	const float MinXByColumn[] = { X0, X1, X2 };
+	const float MaxXByColumn[] = { X1, X2, X3 };
+	const float MinYByRow[] = { Y1, Y2, Y3 };
+	const float MaxYByRow[] = { Y0, Y1, Y2 };
+
+	OutMin = FVector2D(MinXByColumn[Column], MinYByRow[Row]);
+	OutMax = FVector2D(MaxXByColumn[Column], MaxYByRow[Row]);
+	return true;
+}
+
+bool AChemicalBondGameDirector::IsWorldLocationInsideRefreshHalfExtent(
+	const FVector& WorldLocation,
+	const FVector2D& HalfExtent) const
+{
+	FRefreshRangeFrame Frame;
+	if (!TryBuildRefreshRangeFrame(this, Frame))
+	{
+		return false;
+	}
+
+	const FVector2D LocalLocation = Frame.ToLocal2D(WorldLocation);
+	return FMath::Abs(LocalLocation.X) <= HalfExtent.X && FMath::Abs(LocalLocation.Y) <= HalfExtent.Y;
+}
+
+bool AChemicalBondGameDirector::IsSpawnLocationLegal(const FVector& SpawnLocation, float SpawnProximityRadius) const
+{
+	FRefreshRangeFrame Frame;
+	if (!TryBuildRefreshRangeFrame(this, Frame))
+	{
+		return false;
+	}
+
+	const FVector2D LocalLocation = Frame.ToLocal2D(SpawnLocation);
+	if (FMath::Abs(LocalLocation.X) <= Frame.ViewPortHalfExtent.X
+		&& FMath::Abs(LocalLocation.Y) <= Frame.ViewPortHalfExtent.Y)
+	{
+		return false;
+	}
+
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		const AAtomBase* Atom = AtomPair.Value.Get();
+		if (!Atom || Atom->IsPlayerControlled() || Atom->GetAtomState() != EAtomState::Free)
+		{
+			continue;
+		}
+
+		const float CombinedRadius = SpawnProximityRadius + Atom->GetProximityRadius();
+		if (DistanceSquaredPointToSegment2D(Atom->GetActorLocation(), SpawnLocation, Frame.Center)
+			<= FMath::Square(CombinedRadius))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
 FGuid AChemicalBondGameDirector::GenerateUniqueAtomUid() const
 {
 	FGuid NewUid;
@@ -3331,4 +3971,784 @@ void AChemicalBondGameDirector::HandleBondRegistryMismatch(const FString& ErrorM
 		TEXT("[Game:Director] Bond registry mismatch is fatal. Director registries were rebuilt from atom-local data before throwing. Director=%s Error=%s"),
 		*GetNameSafe(this),
 		*ErrorMessage);
+}
+
+void AChemicalBondGameDirector::MarkPlayerMoleculeDirty()
+{
+	bPlayerMoleculeDirty = true;
+}
+
+void AChemicalBondGameDirector::ProcessPlayerMoleculeDetection()
+{
+	if (!bPlayerMoleculeDirty)
+	{
+		return;
+	}
+
+	bPlayerMoleculeDirty = false;
+
+	FChemicalBondMoleculeSnapshot Snapshot;
+	if (!BuildPlayerMoleculeSnapshot(Snapshot))
+	{
+		RingDecisionQueue.Reset();
+		bHasActiveRingDecision = false;
+		return;
+	}
+
+	TArray<FChemicalBondRing> ClosedRings;
+	TArray<FChemicalBondRingCandidate> RingCandidates;
+	AnalyzeRings(Snapshot, ClosedRings, RingCandidates);
+	EnqueueRingCandidates(RingCandidates);
+	StartNextRingDecision();
+
+	if (EvaluateVictory(Snapshot, ClosedRings))
+	{
+		ReportVictory();
+	}
+
+	TArray<FChemicalBondDebuffMatch> DebuffMatches;
+	DetectDebuffGroups(Snapshot, DebuffMatches);
+	for (const FChemicalBondDebuffMatch& Match : DebuffMatches)
+	{
+		ExecuteDebuff(Match);
+	}
+
+	OnPlayerMoleculeChanged();
+}
+
+void AChemicalBondGameDirector::OnPlayerMoleculeChanged()
+{
+	UE_LOG(LogChemicalBondDirector, Verbose, TEXT("[Game:Molecule] Player molecule detection refreshed."));
+}
+
+AAtomBase* AChemicalBondGameDirector::FindPlayerAnchorAtom() const
+{
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		AAtomBase* Atom = AtomPair.Value.Get();
+		if (Atom && Atom->IsPlayerControlled())
+		{
+			return Atom;
+		}
+	}
+
+	for (const TPair<FGuid, TWeakObjectPtr<AAtomBase>>& AtomPair : AtomRegistry)
+	{
+		AAtomBase* Atom = AtomPair.Value.Get();
+		if (Atom && Atom->GetAtomState() == EAtomState::PlayerConnected)
+		{
+			return Atom;
+		}
+	}
+
+	return nullptr;
+}
+
+bool AChemicalBondGameDirector::BuildPlayerMoleculeSnapshot(FChemicalBondMoleculeSnapshot& OutSnapshot) const
+{
+	OutSnapshot = FChemicalBondMoleculeSnapshot();
+
+	AAtomBase* AnchorAtom = FindPlayerAnchorAtom();
+	if (!AnchorAtom)
+	{
+		return false;
+	}
+
+	TArray<AAtomBase*> PendingAtoms;
+	TSet<FGuid> VisitedAtomUids;
+	PendingAtoms.Add(AnchorAtom);
+
+	while (!PendingAtoms.IsEmpty())
+	{
+		AAtomBase* Atom = PendingAtoms.Pop(EAllowShrinking::No);
+		if (!Atom)
+		{
+			continue;
+		}
+
+		const FGuid AtomUid = Atom->GetAtomUid();
+		if (!AtomUid.IsValid() || VisitedAtomUids.Contains(AtomUid))
+		{
+			continue;
+		}
+
+		VisitedAtomUids.Add(AtomUid);
+
+		FChemicalBondMoleculeNode Node;
+		Node.AtomUid = AtomUid;
+		Node.ElementType = Atom->GetElementType();
+		Node.BaseElement = ChemicalBondElement::GetBaseElement(Node.ElementType);
+		// 已拒绝全部候选或已完成一次闭合的成环原子，后续按普通原子处理。
+		Node.bCanFormRing = Atom->CanFormRing()
+			&& !DemotedRingAtomUids.Contains(AtomUid)
+			&& !CompletedRingAtomUids.Contains(AtomUid);
+		OutSnapshot.UidToIndex.Add(AtomUid, OutSnapshot.Nodes.Num());
+		OutSnapshot.Nodes.Add(Node);
+
+		int32& ElementCount = OutSnapshot.ElementCounts.FindOrAdd(ChemicalBondElement::GetBaseElement(Atom->GetElementType()));
+		++ElementCount;
+
+		for (const FBondRecord& BondRecord : Atom->GetBonds())
+		{
+			if (AAtomBase* PartnerAtom = BondRecord.PartnerAtom.Get())
+			{
+				PendingAtoms.Add(PartnerAtom);
+			}
+		}
+	}
+
+	for (const TPair<FGuid, FChemicalBondRegistryRecord>& BondPair : BondRegistry)
+	{
+		const FChemicalBondRegistryRecord& Record = BondPair.Value;
+		const int32 AtomAIndex = OutSnapshot.IndexOfUid(Record.AtomAUid);
+		const int32 AtomBIndex = OutSnapshot.IndexOfUid(Record.AtomBUid);
+		if (AtomAIndex == INDEX_NONE || AtomBIndex == INDEX_NONE)
+		{
+			continue;
+		}
+
+		FChemicalBondMoleculeEdge EdgeToB;
+		EdgeToB.NeighborIndex = AtomBIndex;
+		EdgeToB.BondType = Record.BondType;
+		EdgeToB.BondUid = Record.BondUid;
+		OutSnapshot.Nodes[AtomAIndex].Edges.Add(EdgeToB);
+
+		FChemicalBondMoleculeEdge EdgeToA;
+		EdgeToA.NeighborIndex = AtomAIndex;
+		EdgeToA.BondType = Record.BondType;
+		EdgeToA.BondUid = Record.BondUid;
+		OutSnapshot.Nodes[AtomBIndex].Edges.Add(EdgeToA);
+
+		switch (Record.BondType)
+		{
+		case EBondType::Single:
+			++OutSnapshot.SingleBondCount;
+			break;
+		case EBondType::Double:
+			++OutSnapshot.DoubleBondCount;
+			break;
+		case EBondType::Triple:
+			++OutSnapshot.TripleBondCount;
+			break;
+		default:
+			break;
+		}
+	}
+
+	return OutSnapshot.NumAtoms() > 0;
+}
+
+void AChemicalBondGameDirector::AnalyzeRings(
+	const FChemicalBondMoleculeSnapshot& Snapshot,
+	TArray<FChemicalBondRing>& OutClosedRings,
+	TArray<FChemicalBondRingCandidate>& OutCandidates) const
+{
+	OutClosedRings.Reset();
+	OutCandidates.Reset();
+
+	TSet<FString> ClosedRingKeys;
+	TSet<FString> CandidateKeys;
+
+	auto MakeUidSetKey = [](const TArray<FGuid>& Uids)
+	{
+		TArray<FString> Parts;
+		for (const FGuid& Uid : Uids)
+		{
+			Parts.Add(Uid.ToString(EGuidFormats::Digits));
+		}
+		Parts.Sort();
+		return FString::Join(Parts, TEXT("|"));
+	};
+
+	for (int32 StartIndex = 0; StartIndex < Snapshot.Nodes.Num(); ++StartIndex)
+	{
+		TArray<int32> Path;
+		TSet<int32> Visited;
+
+		TFunction<void(int32)> WalkClosedRings = [&](int32 CurrentIndex)
+		{
+			if (Path.Num() > 6)
+			{
+				return;
+			}
+
+			const FChemicalBondMoleculeNode& CurrentNode = Snapshot.Nodes[CurrentIndex];
+			for (const FChemicalBondMoleculeEdge& Edge : CurrentNode.Edges)
+			{
+				const int32 NeighborIndex = Edge.NeighborIndex;
+				if (NeighborIndex == StartIndex && Path.Num() >= 4 && Path.Num() <= 6)
+				{
+					TArray<FGuid> RingUids;
+					for (const int32 PathIndex : Path)
+					{
+						RingUids.Add(Snapshot.Nodes[PathIndex].AtomUid);
+					}
+
+					const FString RingKey = MakeUidSetKey(RingUids);
+					if (!ClosedRingKeys.Contains(RingKey))
+					{
+						ClosedRingKeys.Add(RingKey);
+
+						FChemicalBondRing Ring;
+						Ring.NodeIndices = Path;
+						Ring.Size = Path.Num();
+						Ring.Topology = ChemicalBondElement::RingSizeToTopology(Ring.Size);
+						OutClosedRings.Add(Ring);
+					}
+					continue;
+				}
+
+				if (NeighborIndex <= StartIndex || Visited.Contains(NeighborIndex) || Path.Num() >= 6)
+				{
+					continue;
+				}
+
+				Visited.Add(NeighborIndex);
+				Path.Add(NeighborIndex);
+				WalkClosedRings(NeighborIndex);
+				Path.Pop(EAllowShrinking::No);
+				Visited.Remove(NeighborIndex);
+			}
+		};
+
+		Visited.Add(StartIndex);
+		Path.Add(StartIndex);
+		WalkClosedRings(StartIndex);
+	}
+
+	for (int32 StartIndex = 0; StartIndex < Snapshot.Nodes.Num(); ++StartIndex)
+	{
+		const FChemicalBondMoleculeNode& StartNode = Snapshot.Nodes[StartIndex];
+		AAtomBase* RingAtom = GetAtomByUid(StartNode.AtomUid);
+		if (!StartNode.bCanFormRing || !RingAtom || RingAtom->GetAvailableSlotCount() <= 0)
+		{
+			continue;
+		}
+
+		TArray<int32> Path;
+		TSet<int32> Visited;
+		Path.Add(StartIndex);
+		Visited.Add(StartIndex);
+
+		TFunction<void(int32)> WalkCandidates = [&](int32 CurrentIndex)
+		{
+			if (Path.Num() > 6)
+			{
+				return;
+			}
+
+			if (Path.Num() >= 4)
+			{
+				const FChemicalBondMoleculeNode& TargetNode = Snapshot.Nodes[CurrentIndex];
+				AAtomBase* TargetAtom = GetAtomByUid(TargetNode.AtomUid);
+				FGuid ExistingBondUid;
+				EBondType ExistingBondType = EBondType::Single;
+				if (TargetAtom
+					&& TargetAtom != RingAtom
+					&& TargetAtom->GetAvailableSlotCount() > 0
+					&& !FindExistingBondBetween(RingAtom, TargetAtom, ExistingBondUid, ExistingBondType))
+				{
+					FChemicalBondRingCandidate Candidate;
+					Candidate.RingAtomUid = StartNode.AtomUid;
+					Candidate.TargetAtomUid = TargetNode.AtomUid;
+					Candidate.RingSize = Path.Num();
+					for (const int32 PathIndex : Path)
+					{
+						Candidate.PathAtomUids.Add(Snapshot.Nodes[PathIndex].AtomUid);
+					}
+
+					const FString CandidateKey = MakeUidSetKey(Candidate.PathAtomUids)
+						+ TEXT("|")
+						+ Candidate.RingAtomUid.ToString(EGuidFormats::Digits)
+						+ TEXT("|")
+						+ Candidate.TargetAtomUid.ToString(EGuidFormats::Digits);
+					if (!CandidateKeys.Contains(CandidateKey))
+					{
+						CandidateKeys.Add(CandidateKey);
+						OutCandidates.Add(Candidate);
+					}
+				}
+			}
+
+			if (Path.Num() >= 6)
+			{
+				return;
+			}
+
+			for (const FChemicalBondMoleculeEdge& Edge : Snapshot.Nodes[CurrentIndex].Edges)
+			{
+				if (Visited.Contains(Edge.NeighborIndex))
+				{
+					continue;
+				}
+
+				Visited.Add(Edge.NeighborIndex);
+				Path.Add(Edge.NeighborIndex);
+				WalkCandidates(Edge.NeighborIndex);
+				Path.Pop(EAllowShrinking::No);
+				Visited.Remove(Edge.NeighborIndex);
+			}
+		};
+
+		WalkCandidates(StartIndex);
+	}
+}
+
+void AChemicalBondGameDirector::EnqueueRingCandidates(const TArray<FChemicalBondRingCandidate>& Candidates)
+{
+	for (const FChemicalBondRingCandidate& Candidate : Candidates)
+	{
+		if (!IsRingCandidateQueuedOrActive(Candidate))
+		{
+			RingDecisionQueue.Add(Candidate);
+		}
+	}
+}
+
+bool AChemicalBondGameDirector::IsRingCandidateQueuedOrActive(const FChemicalBondRingCandidate& Candidate) const
+{
+	if (bHasActiveRingDecision && ActiveRingCandidate.IsSameCandidate(Candidate))
+	{
+		return true;
+	}
+
+	for (const FChemicalBondRingCandidate& QueuedCandidate : RingDecisionQueue)
+	{
+		if (QueuedCandidate.IsSameCandidate(Candidate))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void AChemicalBondGameDirector::StartNextRingDecision()
+{
+	if (bHasActiveRingDecision)
+	{
+		return;
+	}
+
+	while (!RingDecisionQueue.IsEmpty())
+	{
+		ActiveRingCandidate = RingDecisionQueue.Last();
+		RingDecisionQueue.RemoveAt(RingDecisionQueue.Num() - 1, 1, EAllowShrinking::No);
+		ActiveRingClosingBondUid.Invalidate();
+		bHasActiveRingDecision = true;
+
+		if (DemotedRingAtomUids.Contains(ActiveRingCandidate.RingAtomUid)
+			|| CompletedRingAtomUids.Contains(ActiveRingCandidate.RingAtomUid))
+		{
+			bHasActiveRingDecision = false;
+			ActiveRingCandidate = FChemicalBondRingCandidate();
+			continue;
+		}
+
+		if (IsActiveRingCandidateStillValid())
+		{
+			UE_LOG(LogChemicalBondDirector, Log,
+				TEXT("[Game:Ring] Ring decision started. RingAtom=%s Target=%s Size=%d"),
+				*ActiveRingCandidate.RingAtomUid.ToString(),
+				*ActiveRingCandidate.TargetAtomUid.ToString(),
+				ActiveRingCandidate.RingSize);
+			return;
+		}
+
+		bHasActiveRingDecision = false;
+	}
+}
+
+bool AChemicalBondGameDirector::HandleRingDecisionConfirmInput()
+{
+	if (!IsActiveRingCandidateStillValid())
+	{
+		FinishActiveRingDecision(true);
+		return false;
+	}
+
+	AAtomBase* RingAtom = GetAtomByUid(ActiveRingCandidate.RingAtomUid);
+	AAtomBase* TargetAtom = GetAtomByUid(ActiveRingCandidate.TargetAtomUid);
+	if (!RingAtom || !TargetAtom)
+	{
+		FinishActiveRingDecision(true);
+		return false;
+	}
+
+	if (!ActiveRingClosingBondUid.IsValid())
+	{
+		int32 RingSlot = INDEX_NONE;
+		int32 TargetSlot = INDEX_NONE;
+		if (!FindClosestFreeSlotPair(RingAtom, TargetAtom, RingSlot, TargetSlot))
+		{
+			FinishActiveRingDecision(true);
+			return false;
+		}
+
+		ActiveRingClosingBondUid = LinkAtoms(RingAtom, TargetAtom, EBondType::Single, RingSlot, TargetSlot);
+		if (!ActiveRingClosingBondUid.IsValid())
+		{
+			FinishActiveRingDecision(true);
+			return false;
+		}
+
+		TArray<AAtomBase*> RingAtoms;
+		for (const FGuid& AtomUid : ActiveRingCandidate.PathAtomUids)
+		{
+			RingAtoms.Add(GetAtomByUid(AtomUid));
+		}
+		ArrangeRingAsRegularPolygon(RingAtoms);
+		RecapturePlayerGroupLayoutFromCurrent(FindPlayerAnchorAtom());
+		CompletedRingAtomUids.Add(ActiveRingCandidate.RingAtomUid);
+		for (int32 CandidateIndex = RingDecisionQueue.Num() - 1; CandidateIndex >= 0; --CandidateIndex)
+		{
+			if (RingDecisionQueue[CandidateIndex].RingAtomUid == ActiveRingCandidate.RingAtomUid)
+			{
+				RingDecisionQueue.RemoveAt(CandidateIndex, 1, EAllowShrinking::No);
+			}
+		}
+		UE_LOG(LogChemicalBondDirector, Log,
+			TEXT("[Game:Ring] Ring atom completed and will be treated as normal atom in future ring detection. RingAtom=%s"),
+			*ActiveRingCandidate.RingAtomUid.ToString());
+		return true;
+	}
+
+	bool bFoundBond = false;
+	const FChemicalBondRegistryRecord BondRecord = GetBondRecord(ActiveRingClosingBondUid, bFoundBond);
+	if (!bFoundBond || BondRecord.BondType == EBondType::Triple)
+	{
+		FinishActiveRingDecision(false);
+		return bFoundBond;
+	}
+
+	int32 RingSlot = INDEX_NONE;
+	int32 TargetSlot = INDEX_NONE;
+	if (!FindClosestFreeSlotPair(RingAtom, TargetAtom, RingSlot, TargetSlot))
+	{
+		FinishActiveRingDecision(false);
+		return false;
+	}
+
+	const EBondType NewBondType = BondRecord.BondType == EBondType::Single ? EBondType::Double : EBondType::Triple;
+	const bool bChanged = ChangeBondType(ActiveRingClosingBondUid, NewBondType, RingSlot, TargetSlot);
+	if (bChanged)
+	{
+		MarkPlayerMoleculeDirty();
+	}
+	return bChanged;
+}
+
+bool AChemicalBondGameDirector::HandleRingDecisionRejectInput()
+{
+	if (!bHasActiveRingDecision)
+	{
+		return false;
+	}
+
+	// 已闭合：F 结束当前成环并保留已形成的环。
+	if (ActiveRingClosingBondUid.IsValid())
+	{
+		FinishActiveRingDecision(false);
+		return true;
+	}
+
+	// 未闭合：拒绝当前候选。
+	const FGuid RejectedRingAtomUid = ActiveRingCandidate.RingAtomUid;
+
+	bHasActiveRingDecision = false;
+	ActiveRingCandidate = FChemicalBondRingCandidate();
+	ActiveRingClosingBondUid.Invalidate();
+
+	// 该成环原子在队列里是否还有其他候选。
+	bool bRingAtomHasMoreCandidates = false;
+	for (const FChemicalBondRingCandidate& QueuedCandidate : RingDecisionQueue)
+	{
+		if (QueuedCandidate.RingAtomUid == RejectedRingAtomUid)
+		{
+			bRingAtomHasMoreCandidates = true;
+			break;
+		}
+	}
+
+	// 玩家拒绝了该成环原子的全部成环可能性：降级为普通原子，后续不再检测成环。
+	if (!bRingAtomHasMoreCandidates && RejectedRingAtomUid.IsValid())
+	{
+		DemotedRingAtomUids.Add(RejectedRingAtomUid);
+		UE_LOG(LogChemicalBondDirector, Log,
+			TEXT("[Game:Ring] Ring atom demoted to normal after all candidates rejected. RingAtom=%s"),
+			*RejectedRingAtomUid.ToString());
+	}
+
+	StartNextRingDecision();
+	return true;
+}
+
+void AChemicalBondGameDirector::FinishActiveRingDecision(bool bRejected)
+{
+	// 只清当前激活的成环决策状态，不清空队列；队列中其他成环原子的候选继续依次处理。
+	bHasActiveRingDecision = false;
+	ActiveRingCandidate = FChemicalBondRingCandidate();
+	ActiveRingClosingBondUid.Invalidate();
+
+	StartNextRingDecision();
+}
+
+bool AChemicalBondGameDirector::IsActiveRingCandidateStillValid() const
+{
+	if (!bHasActiveRingDecision)
+	{
+		return false;
+	}
+
+	AAtomBase* RingAtom = GetAtomByUid(ActiveRingCandidate.RingAtomUid);
+	AAtomBase* TargetAtom = GetAtomByUid(ActiveRingCandidate.TargetAtomUid);
+	if (!RingAtom || !TargetAtom || RingAtom == TargetAtom)
+	{
+		return false;
+	}
+
+	if (!ActiveRingClosingBondUid.IsValid()
+		&& (RingAtom->GetAvailableSlotCount() <= 0 || TargetAtom->GetAvailableSlotCount() <= 0))
+	{
+		return false;
+	}
+
+	for (const FGuid& AtomUid : ActiveRingCandidate.PathAtomUids)
+	{
+		if (!GetAtomByUid(AtomUid))
+		{
+			return false;
+		}
+	}
+
+	return ActiveRingCandidate.RingSize >= 4 && ActiveRingCandidate.RingSize <= 6;
+}
+
+void AChemicalBondGameDirector::ArrangeRingAsRegularPolygon(const TArray<AAtomBase*>& RingAtoms)
+{
+	const int32 RingSize = RingAtoms.Num();
+	if (RingSize < 4)
+	{
+		return;
+	}
+
+	FVector Center = FVector::ZeroVector;
+	for (AAtomBase* Atom : RingAtoms)
+	{
+		if (!Atom)
+		{
+			return;
+		}
+		Center += ChemicalBondGameplayPlane::ProjectLocation(Atom->GetActorLocation());
+	}
+	Center /= RingSize;
+
+	const float Radius = RingPolygonEdgeLength / (2.f * FMath::Sin(PI / static_cast<float>(RingSize)));
+	for (int32 AtomIndex = 0; AtomIndex < RingSize; ++AtomIndex)
+	{
+		AAtomBase* Atom = RingAtoms[AtomIndex];
+		const float AngleRadians = 2.f * PI * static_cast<float>(AtomIndex) / static_cast<float>(RingSize);
+		const FVector Location = ChemicalBondGameplayPlane::ProjectLocation(
+			Center + FVector(FMath::Cos(AngleRadians) * Radius, FMath::Sin(AngleRadians) * Radius, 0.f));
+		Atom->SetActorLocation(Location, false);
+		StopConstrainedAtomMotion(Atom);
+	}
+
+	for (int32 AtomIndex = 0; AtomIndex < RingSize; ++AtomIndex)
+	{
+		AAtomBase* Atom = RingAtoms[AtomIndex];
+		Atom->ClearAllRingSlotAngleOverrides();
+
+		const int32 PrevIndex = (AtomIndex + RingSize - 1) % RingSize;
+		const int32 NextIndex = (AtomIndex + 1) % RingSize;
+		const TSet<AAtomBase*> RingNeighbors = { RingAtoms[PrevIndex], RingAtoms[NextIndex] };
+
+		for (const FBondRecord& BondRecord : Atom->GetBonds())
+		{
+			AAtomBase* PartnerAtom = BondRecord.PartnerAtom.Get();
+			if (!RingNeighbors.Contains(PartnerAtom))
+			{
+				continue;
+			}
+
+			const FVector Direction = ChemicalBondGameplayPlane::ProjectVector(
+				PartnerAtom->GetActorLocation() - Atom->GetActorLocation());
+			const float WorldYaw = GetPlanarYawDegrees(Direction);
+			const float LocalYaw = FindShortestAngleDegrees(Atom->GetActorRotation().Yaw, WorldYaw);
+			Atom->SetRingSlotAngleOverrideDegrees(BondRecord.MySlotIndex, LocalYaw);
+			for (const int32 SlotIndex : BondRecord.MySlotIndices)
+			{
+				Atom->SetRingSlotAngleOverrideDegrees(SlotIndex, LocalYaw);
+			}
+		}
+
+		Atom->NotifyBondLayoutChanged();
+	}
+
+	UpdateAllBondVisuals();
+}
+
+void AChemicalBondGameDirector::RecapturePlayerGroupLayoutFromCurrent(AAtomBase* AnchorAtom)
+{
+	if (!AnchorAtom)
+	{
+		return;
+	}
+
+	TArray<AAtomBase*> GroupAtoms;
+	TSet<FAtomInteractionPairKey> GroupPairKeys;
+	CollectBondedGroup(AnchorAtom, GroupAtoms, GroupPairKeys);
+
+	TMap<FGuid, FTransform>& LocalTransforms = RigidGroupLocalTransforms.FindOrAdd(AnchorAtom->GetAtomUid());
+	LocalTransforms.Reset();
+	const FTransform AnchorTransform = AnchorAtom->GetActorTransform();
+	for (AAtomBase* GroupAtom : GroupAtoms)
+	{
+		if (GroupAtom && GroupAtom != AnchorAtom)
+		{
+			LocalTransforms.Add(GroupAtom->GetAtomUid(), GroupAtom->GetActorTransform().GetRelativeTransform(AnchorTransform));
+		}
+	}
+}
+
+bool AChemicalBondGameDirector::EvaluateVictory(
+	const FChemicalBondMoleculeSnapshot& Snapshot,
+	const TArray<FChemicalBondRing>& ClosedRings) const
+{
+	if (!LevelGoalAsset || bVictoryReported)
+	{
+		return false;
+	}
+
+	FString UnmetReason;
+	const bool bGoalMet = LevelGoalAsset->EvaluateAgainst(Snapshot, ClosedRings, UnmetReason);
+	if (!bGoalMet)
+	{
+		UE_LOG(LogChemicalBondDirector, Verbose, TEXT("[Game:Victory] Goal not met. Reason=%s"), *UnmetReason);
+	}
+	return bGoalMet;
+}
+
+void AChemicalBondGameDirector::ReportVictory()
+{
+	if (bVictoryReported)
+	{
+		return;
+	}
+
+	bVictoryReported = true;
+	UE_LOG(LogChemicalBondDirector, Log, TEXT("[Game:Victory] Level goal met."));
+}
+
+void AChemicalBondGameDirector::DetectDebuffGroups(
+	const FChemicalBondMoleculeSnapshot& Snapshot,
+	TArray<FChemicalBondDebuffMatch>& OutMatches) const
+{
+	OutMatches.Reset();
+	TSet<FString> MatchKeys;
+
+	auto AddMatch = [&OutMatches, &MatchKeys](EChemicalBondDebuffType DebuffType, TArray<FGuid> MemberUids)
+	{
+		TArray<FString> Parts;
+		for (const FGuid& Uid : MemberUids)
+		{
+			Parts.Add(Uid.ToString(EGuidFormats::Digits));
+		}
+		Parts.Sort();
+		const FString Key = FString::FromInt(static_cast<int32>(DebuffType)) + TEXT("|") + FString::Join(Parts, TEXT("|"));
+		if (MatchKeys.Contains(Key))
+		{
+			return;
+		}
+
+		MatchKeys.Add(Key);
+		FChemicalBondDebuffMatch Match;
+		Match.DebuffType = DebuffType;
+		Match.MemberAtomUids = MoveTemp(MemberUids);
+		OutMatches.Add(Match);
+	};
+
+	for (int32 NodeIndex = 0; NodeIndex < Snapshot.Nodes.Num(); ++NodeIndex)
+	{
+		const FChemicalBondMoleculeNode& Node = Snapshot.Nodes[NodeIndex];
+
+		if (Node.BaseElement == EChemicalBondBaseElement::Nitrogen)
+		{
+			TArray<FGuid> DoubleOxygens;
+			for (const FChemicalBondMoleculeEdge& Edge : Node.Edges)
+			{
+				const FChemicalBondMoleculeNode& Neighbor = Snapshot.Nodes[Edge.NeighborIndex];
+				if (Neighbor.BaseElement == EChemicalBondBaseElement::Oxygen && Edge.BondType == EBondType::Double)
+				{
+					DoubleOxygens.Add(Neighbor.AtomUid);
+				}
+			}
+
+			if (DoubleOxygens.Num() >= 2)
+			{
+				AddMatch(EChemicalBondDebuffType::NitroNO2, { Node.AtomUid, DoubleOxygens[0], DoubleOxygens[1] });
+			}
+		}
+
+		for (const FChemicalBondMoleculeEdge& Edge : Node.Edges)
+		{
+			const FChemicalBondMoleculeNode& Neighbor = Snapshot.Nodes[Edge.NeighborIndex];
+			if (Node.BaseElement == EChemicalBondBaseElement::Carbon
+				&& Neighbor.BaseElement == EChemicalBondBaseElement::Nitrogen
+				&& Edge.BondType == EBondType::Triple)
+			{
+				AddMatch(EChemicalBondDebuffType::CyanoCN, { Node.AtomUid, Neighbor.AtomUid });
+			}
+
+			if (Node.BaseElement == EChemicalBondBaseElement::Oxygen
+				&& Neighbor.BaseElement == EChemicalBondBaseElement::Oxygen
+				&& Edge.BondType == EBondType::Single)
+			{
+				AddMatch(EChemicalBondDebuffType::PeroxideOO, { Node.AtomUid, Neighbor.AtomUid });
+			}
+
+			if (Node.BaseElement == EChemicalBondBaseElement::Nitrogen
+				&& Neighbor.BaseElement == EChemicalBondBaseElement::Carbon
+				&& Edge.BondType == EBondType::Double)
+			{
+				for (const FChemicalBondMoleculeEdge& CarbonEdge : Neighbor.Edges)
+				{
+					const FChemicalBondMoleculeNode& CarbonNeighbor = Snapshot.Nodes[CarbonEdge.NeighborIndex];
+					if (CarbonNeighbor.BaseElement == EChemicalBondBaseElement::Oxygen
+						&& CarbonEdge.BondType == EBondType::Double)
+					{
+						AddMatch(EChemicalBondDebuffType::IsocyanateNCO, { Node.AtomUid, Neighbor.AtomUid, CarbonNeighbor.AtomUid });
+					}
+				}
+			}
+		}
+	}
+}
+
+void AChemicalBondGameDirector::ExecuteDebuff(const FChemicalBondDebuffMatch& Match)
+{
+	// 占位实现：当前迭代只识别危害基团存在并触发效果入口，不实现具体危害效果。
+	const TCHAR* DebuffTypeName = TEXT("Unknown");
+	switch (Match.DebuffType)
+	{
+	case EChemicalBondDebuffType::NitroNO2:
+		DebuffTypeName = TEXT("-NO2");
+		break;
+	case EChemicalBondDebuffType::CyanoCN:
+		DebuffTypeName = TEXT("-C三N");
+		break;
+	case EChemicalBondDebuffType::PeroxideOO:
+		DebuffTypeName = TEXT("-O-O-");
+		break;
+	case EChemicalBondDebuffType::IsocyanateNCO:
+		DebuffTypeName = TEXT("-N=C=O");
+		break;
+	default:
+		break;
+	}
+
+	UE_LOG(LogChemicalBondDirector, Warning,
+		TEXT("[Game:Debuff] Debuff group present and triggered effect. Type=%s MemberCount=%d"),
+		DebuffTypeName,
+		Match.MemberAtomUids.Num());
 }

@@ -18,6 +18,7 @@ public:
 	APlaygroundAtom();
 
 	// Playground API
+	virtual void ConfigureElementType(EAtomElementType InElementType) override;
 	void ConfigurePlaygroundAtom(EAtomElementType InElementType);
 
 protected:

@@ -8,7 +8,7 @@ public class ChemicalBond : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 	
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "Niagara" });
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "Niagara", "ProceduralMeshComponent" });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 

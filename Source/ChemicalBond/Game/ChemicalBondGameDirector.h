@@ -3,17 +3,19 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "HLSLTypeAliases.h"
 #include "GameFramework/Actor.h"
 #include "../AtomTypes.h"
+#include "ChemicalBondMoleculeTypes.h"
 #include "ChemicalBondGameDirector.generated.h"
 
-class APlaygroundAtom;
-class UCameraComponent;
 class AAtomBase;
 class AChemicalBondGameMode;
 class UNiagaraComponent;
 class UNiagaraSystem;
+class UChemicalBondLevelGoalAsset;
+class UMaterialInstanceDynamic;
+class UMaterialInterface;
+class UProceduralMeshComponent;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogChemicalBondDirector, Log, All);
 
@@ -107,35 +109,6 @@ struct FBondVisualComponentList
 	TArray<TObjectPtr<UNiagaraComponent>> Components;
 };
 
-USTRUCT(BlueprintType)
-struct FRefreshRegionInfo
-{
-	GENERATED_BODY()
-
-	// 区域范围
-	UPROPERTY(BlueprintReadOnly)
-	FVector MinRange;
-	
-	UPROPERTY(BlueprintReadOnly)
-	FVector MaxRange;
-	
-	// 相关区域
-	UPROPERTY(BlueprintReadOnly)
-	TArray<uint8> SubGuideRegionIndex;
-	
-	UPROPERTY(BlueprintReadOnly)
-	TArray<uint8> WeakGuideRegionIndex;
-	
-	UPROPERTY(BlueprintReadOnly)
-	TArray<uint8> NonGuideRegionIndex;
-	
-	UPROPERTY(BlueprintReadOnly)
-	uint8 CentrallySymmetricRegionIndex;
-	
-};
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnRegionRefreshed,FRefreshRegionInfo,MainGuideRegion);
-
 // 单局规则编排入口，负责局内系统生命周期、原子/化学键注册表、连接决策队列和临时基团物理连接。
 // 后续分子图、危害、胜负和正式物理约束在设计确认后继续接入。
 UCLASS(Blueprintable)
@@ -215,81 +188,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="ChemicalBond|Connection")
 	void MarkAtomAsPlayerConnected(AAtomBase* Atom);
-	
-	// 计算8个刷新区域
-	
-	// 计算三个区域范围：生存，逻辑，可视范围
-	UFUNCTION(BlueprintCallable,BlueprintPure, Category="BoxRange")
-	 FVector GetViewBoxRange();
 
-	UFUNCTION(BlueprintCallable, BlueprintPure,Category="BoxRange")
-	FVector GetLogicRegionBoxRange();
-
-	UFUNCTION(BlueprintCallable, BlueprintPure,Category="BoxRange")
-	FVector GetAtomLifeRegionBoxRange();
-	
-	
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	TArray<FRefreshRegionInfo> GetAllGridRegionsInfoAtAtomLifeRegion(float Scale=1.f);
-	
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	 int32 GetNextMainGuideRegionIndex(const TArray<FRefreshRegionInfo>& RefreshRegionInfos,uint8 LocalCurrentMainGuideIndex);
-	
-	UFUNCTION(BlueprintCallable,BlueprintPure, Category="BoxRange")
-	FRefreshRegionInfo GetCurrentMainGuideRegionInfo()  ;
-	
-	// 刷新所有区域
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	void RefreshRegions(bool bIsRandom );
-	
-	// 生成8个区域信息
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static TArray<FRefreshRegionInfo> Get_8_Regions(FVector Range);
-	
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	static uint8 FindRegionIndexByLocation(FVector TargetLocation,  const TArray<FRefreshRegionInfo>& RefreshRegionInfos);
-	
-	
-	// ******刷新区域的功能调用入口 *********
-	UFUNCTION(BlueprintCallable, Category="BoxRange")
-	void StartRefreshRegion();
-	
-	
-
-	
-	// 原子刷新逻辑
-	
-	UFUNCTION(BlueprintCallable, Category="AtomSpawn")
-	int32 GetSpawnAtomNumInRegion(float RefreshFrequency);
-	
-	UFUNCTION(BlueprintCallable, Category="AtomSpawn")
-	EAtomElementType GetSpawnAtomTypeInRegion();
-	
-	// TODO:检测随机位置是否合法
-	UFUNCTION(Blueprintable, Category="AtomSpawn")
-	bool  CanSpawnAtomAtPostion(FVector Location);
-	
-	UFUNCTION(Blueprintable, Category="AtomSpawn")
-	FVector  FindSpawnAtomPostionOffset(uint8 regionIndex,uint8 FindNum=10);
-	
-	UFUNCTION(Blueprintable, Category="AtomSpawn")
-	void SpawnAtoms(int32 SpawnNum,UClass* AtomClass,int32 RegionIndex);
-	
-	UFUNCTION(Blueprintable, Category="AtomSpawn")
-	TArray<APlaygroundAtom*> GetAllAtomsOutLifeRange();
-	
-	
-	 // * **  原子刷新逻辑入口 **
-	UFUNCTION(Blueprintable, Category="AtomSpawn")
-	void SpawnAtomInAllRegions();
-	
 	bool ValidateBondRegistryConsistency(FString& OutError) const;
 	void AssertBondRegistryConsistency();
 
-	// 当区域刷新时广播
-	UPROPERTY(BlueprintAssignable)
-	FOnRegionRefreshed OnRegionRefreshed;
-	
 protected:
 	// 生命周期
 	virtual void BeginPlay() override;
@@ -344,6 +246,66 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Connection", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
 	float InteractionCooldownSeconds = 0.35f;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true"))
+	TSubclassOf<AAtomBase> RefreshAtomClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
+	float RefreshIntervalMin = 1.5f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
+	float RefreshIntervalMax = 3.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
+	float GuideIntervalMin = 8.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
+	float GuideIntervalMax = 14.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="1"))
+	int32 TargetFreeAtomCount = 40;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="1"))
+	int32 SpawnPlacementAttempts = 10;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="1.0"))
+	float RefreshBaseCount = 1.5f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0", ClampMax="1.0"))
+	float MainGuideRefreshCoefficient = 1.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0", ClampMax="1.0"))
+	float SubGuideRefreshCoefficient = 0.7f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0", ClampMax="1.0"))
+	float WeakGuideRefreshCoefficient = 0.35f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0", ClampMax="1.0"))
+	float NoneGuideRefreshCoefficient = 0.1f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0", ClampMax="1.0"))
+	float DirectedSpawnRate = 0.5f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float RandomSpawnImpulseMin = 7000.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float RandomSpawnImpulseMax = 11000.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float DirectedSpawnImpulseMin = 14000.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float DirectedSpawnImpulseMax = 22000.f;
+
+	UPROPERTY(Transient)
+	float RefreshTimeRemaining = 0.f;
+
+	UPROPERTY(Transient)
+	float GuideTimeRemaining = 0.f;
+
+	UPROPERTY(Transient)
+	int32 CurrentMainGuideRegion = INDEX_NONE;
+
 	UPROPERTY(Transient)
 	TMap<FAtomInteractionPairKey, FAtomConnectionCandidate> ConnectionCandidates;
 
@@ -367,10 +329,46 @@ private:
 	UPROPERTY(Transient)
 	TMap<FGuid, FBondVisualComponentList> BondVisualComponents;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UProceduralMeshComponent> InteractionRangeFillMesh = nullptr;
+
 	// 蓝图配置：Class=GameDirector 派生类，Range=NiagaraSystem 资源，
 	// Effect=化学键成键时生成的线状特效，参数 start/end 使用槽位中心世界坐标。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UNiagaraSystem> BondVisualSystem = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UMaterialInterface> InteractionRangeFillMaterial = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> InteractionRangeFillMaterialInstance = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	FLinearColor InteractionRangeFillColor = FLinearColor(0.18f, 0.75f, 0.95f, 0.45f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	FLinearColor FreeAtomInteractionRangeColor = FLinearColor(0.55f, 0.58f, 0.6f, 0.45f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	FLinearColor UnavailableInteractionRangeColor = FLinearColor(1.f, 0.18f, 0.1f, 0.45f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true", ClampMin="2.0"))
+	float InteractionRangeFillBoundarySegmentLength = 8.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true", ClampMin="0.0"))
+	float InteractionRangeBoundaryThickness = 8.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	float InteractionRangeFillZOffset = 2.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	bool bEnableInteractionRangeFillVisual = true;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true"))
+	bool bEnableInteractionRangeBoundaryVisual = true;
+
+	UPROPERTY(Transient)
+	bool bLoggedInteractionRangeFillVisual = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UNiagaraComponent> ActiveDecisionWarningComponent = nullptr;
@@ -394,70 +392,53 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Presentation", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
 	float DecisionWarningRadiusParameterScale = 2.f;
 
+	// 蓝图配置：Class=GameDirector 派生类，Range=本关 UChemicalBondLevelGoalAsset 资产，
+	// Effect=本关通关目标（目标原子/键型/拓扑需求）；为空则不进行胜利判定。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Victory", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UChemicalBondLevelGoalAsset> LevelGoalAsset = nullptr;
 
-	// 刷新逻辑参数
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float LogicRegionBoxScale = 1.2f;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float AtomLifeRegionBoxScale = 2.f;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float Tmin = 0.8f;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float Tmax =1.5f;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float MainGuideRefreshFrequency =1.2f;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float SubGuideRefreshFrequency =0.9f;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float  WeakGuideRefreshFrequency =0.7f;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true", ClampMin="0.01"))
-	float   NoneGuideRefreshFrequency =0.6f;
-	
-	// 划分8个刷新区域
-	UPROPERTY(BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 CurrentMainGuideIndex=0;
-	
-	UPROPERTY(BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	TArray<FRefreshRegionInfo>  RefreshRegionInfos;
+	// 蓝图配置：Class=GameDirector 派生类，Range=10.0..1000.0，
+	// Effect=成环后正多边形的边长（相邻环原子中心间距），默认与临时连接距离一致。
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Ring", meta=(AllowPrivateAccess="true", ClampMin="10.0"))
+	float RingPolygonEdgeLength = 90.f;
 
-	
-	//原子生成权重参数
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	float Cbase=3;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 Wnormal=100;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 Wring=10;
-	
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 Wc=50;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 Wh=100;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 Wp=10;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 Wn=20;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="BoxRange", meta=(AllowPrivateAccess="true"))
-	int32 Wo=30;
-	
+	// 成环候选队列（LIFO）：每个候选是一条可闭合的成环可能性。
+	TArray<FChemicalBondRingCandidate> RingDecisionQueue;
 
-	
-	
-	
+	UPROPERTY(Transient)
+	bool bHasActiveRingDecision = false;
+
+	// 当前激活的成环候选与其闭合键。
+	FChemicalBondRingCandidate ActiveRingCandidate;
+
+	UPROPERTY(Transient)
+	FGuid ActiveRingClosingBondUid;
+
+	// 被玩家拒绝全部成环可能性而降级的成环原子 UID；后续检测不再为它们生成成环候选。
+	UPROPERTY(Transient)
+	TSet<FGuid> DemotedRingAtomUids;
+
+	// 已完成至少一次成环闭合的成环原子 UID；后续检测不再为它们生成成环候选。
+	UPROPERTY(Transient)
+	TSet<FGuid> CompletedRingAtomUids;
+
+	// 玩家本体分子结构脏标记，在获得/失去原子后置位，于 Tick 末尾合并结算一次检测。
+	UPROPERTY(Transient)
+	bool bPlayerMoleculeDirty = false;
+
+	// 已经上报过通关，避免重复判定与重复日志。
+	UPROPERTY(Transient)
+	bool bVictoryReported = false;
+
 	FGuid GenerateUniqueAtomUid() const;
 	FGuid GenerateUniqueBondUid() const;
 	void RegisterExistingAtomsInWorld();
 	void AddBondUidToTypeList(FGuid BondUid, EBondType BondType);
 	void RemoveBondUidFromTypeList(FGuid BondUid, EBondType BondType);
 	TArray<FGuid> GetAtomBondUidsForTermination(FGuid AtomUid, AAtomBase* Atom) const;
+	int32 PruneStaleAtomRegistryEntries();
+	bool DoesBondRegistryReferenceAtom(FGuid AtomUid) const;
+	void ClearTransientReferencesForAtom(FGuid AtomUid);
 	bool DoesTypeListContainBond(FGuid BondUid, EBondType BondType) const;
 	bool DoesOtherTypeListContainBond(FGuid BondUid, EBondType BondType) const;
 	void RebuildRegistriesFromAtomData();
@@ -485,6 +466,7 @@ private:
 	bool FindClosestFreeSlotPair(AAtomBase* AtomA, AAtomBase* AtomB, int32& OutAtomASlot, int32& OutAtomBSlot) const;
 	void AlignAtomsForSlotConnection(AAtomBase* AtomA, int32 AtomASlot, AAtomBase* AtomB, int32 AtomBSlot, const TCHAR* Reason);
 	void RefreshAtomBondLayouts(AAtomBase* AtomA, AAtomBase* AtomB) const;
+	void UpdateInteractionRangeFillVisual();
 	void SpawnOrUpdateBondVisual(FGuid BondUid);
 	void UpdateAllBondVisuals();
 	void DestroyBondVisual(FGuid BondUid);
@@ -510,4 +492,55 @@ private:
 	void LockAtom(AAtomBase* Atom);
 	void UnlockAtom(AAtomBase* Atom);
 	void ReleaseDecisionPair(const FAtomInteractionPairKey& PairKey);
+	void InitializeRefreshRuntime();
+	void ProcessSceneRefresh(float DeltaSeconds);
+	void ProcessRefreshGuide(float DeltaSeconds);
+	void ProcessLifeSpanRecycling();
+	void ExecuteGlobalRefresh();
+	bool TrySpawnRefreshAtomInRegion(int32 RegionIndex);
+	EAtomElementType PickRefreshElementType() const;
+	void ApplySpawnInitialImpulse(AAtomBase* SpawnedAtom, const FVector& PlayerLocation);
+	int32 CountFreeAtomsInLogicRange() const;
+	int32 CountFreeAtomsInRegion(int32 RegionIndex) const;
+	float GetRefreshCoefficientForRegion(int32 RegionIndex) const;
+	int32 GetPreviousGuideRegion(int32 RegionIndex) const;
+	int32 GetNextGuideRegion(int32 RegionIndex) const;
+	int32 GetOppositeGuideRegion(int32 RegionIndex) const;
+	bool GetRefreshRegionBounds(int32 RegionIndex, FVector2D& OutMin, FVector2D& OutMax) const;
+	bool IsWorldLocationInsideRefreshHalfExtent(const FVector& WorldLocation, const FVector2D& HalfExtent) const;
+	bool IsSpawnLocationLegal(const FVector& SpawnLocation, float SpawnProximityRadius) const;
+
+	// 分子结构统一检测：成环 -> 胜利 -> 危害
+	void MarkPlayerMoleculeDirty();
+	void ProcessPlayerMoleculeDetection();
+	void OnPlayerMoleculeChanged();
+	AAtomBase* FindPlayerAnchorAtom() const;
+	bool BuildPlayerMoleculeSnapshot(FChemicalBondMoleculeSnapshot& OutSnapshot) const;
+
+	// 成环分析与成环决策
+	void AnalyzeRings(
+		const FChemicalBondMoleculeSnapshot& Snapshot,
+		TArray<FChemicalBondRing>& OutClosedRings,
+		TArray<FChemicalBondRingCandidate>& OutCandidates) const;
+	void EnqueueRingCandidates(const TArray<FChemicalBondRingCandidate>& Candidates);
+	bool IsRingCandidateQueuedOrActive(const FChemicalBondRingCandidate& Candidate) const;
+	void StartNextRingDecision();
+	bool HandleRingDecisionConfirmInput();
+	bool HandleRingDecisionRejectInput();
+	void FinishActiveRingDecision(bool bRejected);
+	bool IsActiveRingCandidateStillValid() const;
+	void ArrangeRingAsRegularPolygon(const TArray<AAtomBase*>& RingAtoms);
+	void RecapturePlayerGroupLayoutFromCurrent(AAtomBase* AnchorAtom);
+
+	// 胜利判定
+	bool EvaluateVictory(
+		const FChemicalBondMoleculeSnapshot& Snapshot,
+		const TArray<FChemicalBondRing>& ClosedRings) const;
+	void ReportVictory();
+
+	// 危害扫描
+	void DetectDebuffGroups(
+		const FChemicalBondMoleculeSnapshot& Snapshot,
+		TArray<FChemicalBondDebuffMatch>& OutMatches) const;
+	void ExecuteDebuff(const FChemicalBondDebuffMatch& Match);
 };

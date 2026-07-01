@@ -4,7 +4,6 @@
 #include "Game/ChemicalBondGameMode.h"
 #include "Movement/FluidMotionComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "DrawDebugHelpers.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -21,28 +20,6 @@ AAtomBase::AAtomBase()
     ProximitySphere->SetCollisionProfileName(TEXT("OverlapAll"));
     ProximitySphere->SetGenerateOverlapEvents(true);
 
-    ProximityVisualMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ProximityVisual"));
-    ProximityVisualMesh->SetupAttachment(RootComponent);
-    ProximityVisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-    ProximityVisualMesh->SetGenerateOverlapEvents(false);
-    ProximityVisualMesh->SetCastShadow(false);
-    ProximityVisualMesh->bHiddenInGame = true;
-    ProximityVisualMesh->SetVisibility(false);
-
-    static ConstructorHelpers::FObjectFinder<UStaticMesh> RangeDiscMesh(
-        TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-    if (RangeDiscMesh.Succeeded())
-    {
-        ProximityVisualMesh->SetStaticMesh(RangeDiscMesh.Object);
-    }
-
-    static ConstructorHelpers::FObjectFinder<UMaterialInterface> RangeMaterial(
-        TEXT("/Engine/EngineDebugMaterials/M_SimpleUnlitTranslucent.M_SimpleUnlitTranslucent"));
-    if (RangeMaterial.Succeeded())
-    {
-        ProximityVisualMesh->SetMaterial(0, RangeMaterial.Object);
-    }
-
     static ConstructorHelpers::FObjectFinder<UStaticMesh> SlotMesh(
         TEXT("/Engine/BasicShapes/Sphere.Sphere"));
     if (SlotMesh.Succeeded())
@@ -51,7 +28,7 @@ AAtomBase::AAtomBase()
     }
 
     static ConstructorHelpers::FObjectFinder<UMaterialInterface> SlotMaterial(
-        TEXT("/Engine/EngineDebugMaterials/M_SimpleUnlit.M_SimpleUnlit"));
+        TEXT("/Engine/EngineDebugMaterials/M_SimpleOpaque.M_SimpleOpaque"));
     if (SlotMaterial.Succeeded())
     {
         SlotVisualMaterial = SlotMaterial.Object;
@@ -68,7 +45,6 @@ void AAtomBase::BeginPlay()
     RebuildSlotVisualMeshes();
 
     ProximitySphere->SetSphereRadius(ProximityRadius);
-    RefreshProximityVisual();
     ProximitySphere->OnComponentBeginOverlap.AddDynamic(
         this, &AAtomBase::HandleProximitySphereOverlap);
     ProximitySphere->OnComponentEndOverlap.AddDynamic(
@@ -82,7 +58,6 @@ void AAtomBase::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
     ConstrainToGameplayPlane();
     RefreshSlotVisualLayout();
-    DrawProximityIndicator();
 }
 
 void AAtomBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -146,6 +121,62 @@ void AAtomBase::ApplyRuntimeAtomData(EAtomElementType InElementType, float InMas
     {
         FluidMotionComponent->SetEffectiveMass(Mass);
     }
+}
+
+void AAtomBase::ConfigureElementType(EAtomElementType InElementType)
+{
+    float RuntimeMass = 12.f;
+    int32 RuntimeSlots = 4;
+    bool bRuntimeCanFormRing = false;
+
+    switch (InElementType)
+    {
+    case EAtomElementType::H:
+    case EAtomElementType::H_Normal:
+        RuntimeMass = 1.f;
+        RuntimeSlots = 1;
+        break;
+    case EAtomElementType::O_Normal:
+        RuntimeMass = 16.f;
+        RuntimeSlots = 2;
+        break;
+    case EAtomElementType::O_Ring:
+        RuntimeMass = 16.f;
+        RuntimeSlots = 2;
+        bRuntimeCanFormRing = true;
+        break;
+    case EAtomElementType::N_Normal:
+        RuntimeMass = 14.f;
+        RuntimeSlots = 3;
+        break;
+    case EAtomElementType::N_Ring:
+        RuntimeMass = 14.f;
+        RuntimeSlots = 3;
+        bRuntimeCanFormRing = true;
+        break;
+    case EAtomElementType::P_Normal:
+        RuntimeMass = 31.f;
+        RuntimeSlots = 5;
+        break;
+    case EAtomElementType::P_Ring:
+        RuntimeMass = 31.f;
+        RuntimeSlots = 5;
+        bRuntimeCanFormRing = true;
+        break;
+    case EAtomElementType::C_Ring:
+        RuntimeMass = 12.f;
+        RuntimeSlots = 4;
+        bRuntimeCanFormRing = true;
+        break;
+    case EAtomElementType::C_Player:
+    case EAtomElementType::C_Normal:
+    default:
+        RuntimeMass = 12.f;
+        RuntimeSlots = 4;
+        break;
+    }
+
+    ApplyRuntimeAtomData(InElementType, RuntimeMass, RuntimeSlots, bRuntimeCanFormRing);
 }
 
 void AAtomBase::SetInitialAtomState(EAtomState NewState)
@@ -251,6 +282,7 @@ bool AAtomBase::RemoveBond(int32 MySlotIndex)
                 {
                     SlotOccupied[OccupiedSlotIndex] = false;
                 }
+                RingSlotAngleOverridesDegrees.Remove(OccupiedSlotIndex);
             }
 
             if (Bonds[i].BondUid.IsValid())
@@ -278,6 +310,8 @@ bool AAtomBase::RemoveBondByUid(FGuid InBondUid)
                 {
                     SlotOccupied[MySlotIndex] = false;
                 }
+                // 该键释放的槽位若带有成环角度覆盖，一并清除，避免环断开后留下错误角度。
+                RingSlotAngleOverridesDegrees.Remove(MySlotIndex);
             }
 
             Bonds.RemoveAt(i);
@@ -376,7 +410,6 @@ void AAtomBase::ClearAtomUid()
 void AAtomBase::SetAtomState(EAtomState NewState)
 {
     AtomState = NewState;
-    RefreshProximityVisual();
     OnAtomStateChanged(NewState);
 }
 
@@ -391,6 +424,11 @@ void AAtomBase::BeginInteractionCooldown(float CooldownSeconds)
     InteractionCooldownEndTime = FMath::Max(
         InteractionCooldownEndTime,
         World->GetTimeSeconds() + FMath::Max(0.f, CooldownSeconds));
+}
+
+void AAtomBase::SetInteractionRangeVisualApplicable(bool bInApplicable)
+{
+    bInteractionRangeVisualApplicable = bInApplicable;
 }
 
 void AAtomBase::RefreshSlotVisualLayout()
@@ -421,6 +459,34 @@ void AAtomBase::NotifyBondLayoutChanged()
     RefreshSlotVisualLayout();
 }
 
+void AAtomBase::SetRingSlotAngleOverrideDegrees(int32 SlotIndex, float LocalAngleDegrees)
+{
+    if (SlotIndex < 0 || SlotIndex >= TotalSlots)
+    {
+        return;
+    }
+
+    RingSlotAngleOverridesDegrees.Add(SlotIndex, LocalAngleDegrees);
+    RefreshSlotVisualLayout();
+}
+
+void AAtomBase::ClearRingSlotAngleOverride(int32 SlotIndex)
+{
+    if (RingSlotAngleOverridesDegrees.Remove(SlotIndex) > 0)
+    {
+        RefreshSlotVisualLayout();
+    }
+}
+
+void AAtomBase::ClearAllRingSlotAngleOverrides()
+{
+    if (RingSlotAngleOverridesDegrees.Num() > 0)
+    {
+        RingSlotAngleOverridesDegrees.Reset();
+        RefreshSlotVisualLayout();
+    }
+}
+
 bool AAtomBase::IsInteractionCoolingDown() const
 {
     const UWorld* World = GetWorld();
@@ -440,6 +506,23 @@ bool AAtomBase::IsProximityOverlappingAtom(AAtomBase* OtherAtom) const
     }
 
     return ProximitySphere->IsOverlappingActor(OtherAtom);
+}
+
+EAtomInteractionRangeVisualState AAtomBase::GetInteractionRangeVisualState() const
+{
+    if (!bInteractionRangeVisualApplicable)
+    {
+        return EAtomInteractionRangeVisualState::NotApplicable;
+    }
+
+    if (GetAvailableSlotCount() <= 0)
+    {
+        return EAtomInteractionRangeVisualState::Unavailable;
+    }
+
+    return AtomState == EAtomState::PlayerConnected
+        ? EAtomInteractionRangeVisualState::PlayerGroupAvailable
+        : EAtomInteractionRangeVisualState::FreeAvailable;
 }
 
 FVector AAtomBase::GetSlotWorldLocation(int32 SlotIndex) const
@@ -485,52 +568,6 @@ void AAtomBase::ApplyTemporaryInteractionRadiusFromMass()
         ProximitySphere->SetSphereRadius(ProximityRadius);
     }
 
-    RefreshProximityVisual();
-}
-
-void AAtomBase::RefreshProximityVisual()
-{
-    if (!ProximityVisualMesh)
-    {
-        return;
-    }
-
-    // The old filled disc could occlude atoms through transparency sorting.
-    // Keep the temporary range visual as a debug ring only.
-    const float VisualRadiusScale = FMath::Max(ProximityRadius / 50.f, 0.01f);
-    ProximityVisualMesh->SetRelativeScale3D(FVector(VisualRadiusScale, VisualRadiusScale, 0.015f));
-    ProximityVisualMesh->SetRelativeLocation(FVector(0.f, 0.f, -55.f));
-    ProximityVisualMesh->SetVisibility(false, true);
-}
-
-void AAtomBase::DrawProximityIndicator()
-{
-    UWorld* World = GetWorld();
-    if (!World)
-    {
-        return;
-    }
-
-    const FLinearColor RangeColor =
-        AtomState == EAtomState::PlayerConnected
-            ? FLinearColor(0.1f, 0.9f, 0.65f, 1.f)
-            : AtomState == EAtomState::PendingDecision
-                ? FLinearColor(1.f, 0.8f, 0.15f, 1.f)
-                : FLinearColor(0.35f, 0.65f, 1.f, 1.f);
-    const FVector Center = ChemicalBondGameplayPlane::ProjectLocation(GetActorLocation()) + FVector(0.f, 0.f, -55.f);
-    DrawDebugCircle(
-        World,
-        Center,
-        ProximityRadius,
-        96,
-        RangeColor.ToFColor(true),
-        false,
-        0.f,
-        0,
-        2.f,
-        FVector::ForwardVector,
-        FVector::RightVector,
-        false);
 }
 
 void AAtomBase::RebuildSlotVisualMeshes()
@@ -585,7 +622,15 @@ void AAtomBase::RebuildSlotVisualMeshes()
 FVector AAtomBase::GetSlotRelativeLocation(int32 SlotIndex) const
 {
     float AngleDegrees = GetSlotBaseAngleDegrees(SlotIndex);
-    TryGetMultiBondSlotAngleDegrees(SlotIndex, AngleDegrees);
+    // 成环槽位覆盖优先级最高；其次是多键展开；最后是默认轨道角度。
+    if (const float* RingAngleOverride = RingSlotAngleOverridesDegrees.Find(SlotIndex))
+    {
+        AngleDegrees = *RingAngleOverride;
+    }
+    else
+    {
+        TryGetMultiBondSlotAngleDegrees(SlotIndex, AngleDegrees);
+    }
 
     const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
     const float SafeOrbitDistance = FMath::Max(SlotOrbitDistance, 0.f);

@@ -35,7 +35,6 @@ enum class EAtomElementType : uint8
     P_Normal    UMETA(DisplayName = "P (普通)"),
     P_Ring      UMETA(DisplayName = "P (成环)"),
     H_Normal    UMETA(DisplayName = "H (普通)"),
-    H_Ring      UMETA(DisplayName = "H (成环)"),
 };
 
 UENUM(BlueprintType)
@@ -55,6 +54,15 @@ enum class EAtomState : uint8
 };
 
 // DataTable 行结构，RowName 与 EElementType 变体名对应（如 "C_Normal"）
+UENUM(BlueprintType)
+enum class EAtomInteractionRangeVisualState : uint8
+{
+    NotApplicable        UMETA(DisplayName = "Interaction Range Not Applicable"),
+    Unavailable          UMETA(DisplayName = "Interaction Range Unavailable"),
+    FreeAvailable        UMETA(DisplayName = "Free Atom Interaction Range Available"),
+    PlayerGroupAvailable UMETA(DisplayName = "Player Group Interaction Range Available"),
+};
+
 USTRUCT(BlueprintType)
 struct FAtomDataRow : public FTableRowBase
 {

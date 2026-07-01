@@ -1,6 +1,7 @@
 #include "PlaygroundPlayerPawn.h"
 
 #include "Camera/CameraComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -11,6 +12,11 @@
 #include "InputCoreTypes.h"
 #include "../Movement/FluidMotionComponent.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	constexpr float RefreshBoxSafeHalfHeight = 10000.f;
+}
 
 APlaygroundPlayerPawn::APlaygroundPlayerPawn()
 {
@@ -52,6 +58,25 @@ APlaygroundPlayerPawn::APlaygroundPlayerPawn()
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+
+	auto ConfigureRefreshBox = [this](UBoxComponent* RefreshBox)
+	{
+		RefreshBox->SetupAttachment(RootComponent);
+		RefreshBox->SetUsingAbsoluteRotation(true);
+		RefreshBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		RefreshBox->SetGenerateOverlapEvents(false);
+		RefreshBox->SetHiddenInGame(true);
+		RefreshBox->SetBoxExtent(FVector(1.f, 1.f, RefreshBoxSafeHalfHeight), false);
+	};
+
+	ViewPortBox = CreateDefaultSubobject<UBoxComponent>(TEXT("ViewPortBox"));
+	ConfigureRefreshBox(ViewPortBox);
+
+	LogicBox = CreateDefaultSubobject<UBoxComponent>(TEXT("LogicBox"));
+	ConfigureRefreshBox(LogicBox);
+
+	LifeSpanLimit = CreateDefaultSubobject<UBoxComponent>(TEXT("LifeSpanLimit"));
+	ConfigureRefreshBox(LifeSpanLimit);
 }
 
 void APlaygroundPlayerPawn::PreInitializeComponents()
@@ -78,12 +103,45 @@ void APlaygroundPlayerPawn::BeginPlay()
 		VisualMesh->SetVectorParameterValueOnMaterials(TEXT("Color"), PlayerColorVector);
 		VisualMesh->SetVectorParameterValueOnMaterials(TEXT("BaseColor"), PlayerColorVector);
 	}
+
+	UpdateRefreshRangeBoxes();
 }
 
 void APlaygroundPlayerPawn::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	PollPlaygroundInput();
+	UpdateRefreshRangeBoxes();
+}
+
+bool APlaygroundPlayerPawn::GetRefreshRangeSnapshot(
+	FVector& OutCenter,
+	float& OutYawDegrees,
+	FVector2D& OutViewPortHalfExtent,
+	FVector2D& OutLogicHalfExtent,
+	FVector2D& OutLifeSpanHalfExtent) const
+{
+	if (!ViewPortBox || !LogicBox || !LifeSpanLimit)
+	{
+		return false;
+	}
+
+	const FVector ViewPortExtent = ViewPortBox->GetScaledBoxExtent();
+	const FVector LogicExtent = LogicBox->GetScaledBoxExtent();
+	const FVector LifeSpanExtent = LifeSpanLimit->GetScaledBoxExtent();
+	if (ViewPortExtent.X <= 0.f || ViewPortExtent.Y <= 0.f
+		|| LogicExtent.X <= 0.f || LogicExtent.Y <= 0.f
+		|| LifeSpanExtent.X <= 0.f || LifeSpanExtent.Y <= 0.f)
+	{
+		return false;
+	}
+
+	OutCenter = ChemicalBondGameplayPlane::ProjectLocation(LifeSpanLimit->GetComponentLocation());
+	OutYawDegrees = LifeSpanLimit->GetComponentRotation().Yaw;
+	OutViewPortHalfExtent = FVector2D(ViewPortExtent.X, ViewPortExtent.Y);
+	OutLogicHalfExtent = FVector2D(LogicExtent.X, LogicExtent.Y);
+	OutLifeSpanHalfExtent = FVector2D(LifeSpanExtent.X, LifeSpanExtent.Y);
+	return true;
 }
 
 void APlaygroundPlayerPawn::PollPlaygroundInput()
@@ -177,4 +235,81 @@ void APlaygroundPlayerPawn::PollConnectionDecisionInput(const APlayerController*
 
 	bWasSpaceDown = bSpaceDown;
 	bWasFDown = bFDown;
+}
+
+void APlaygroundPlayerPawn::UpdateRefreshRangeBoxes()
+{
+	const FVector2D CameraVisibleSize = CalculateCameraVisibleSize();
+	if (CameraVisibleSize.IsNearlyZero())
+	{
+		return;
+	}
+
+	const float LogicScale = GetLogicRefreshScale();
+	const float LifeSpanScale = GetLifeSpanRefreshScale();
+	const FRotator RangeRotation(0.f, Camera ? Camera->GetComponentRotation().Yaw : 0.f, 0.f);
+
+	auto UpdateBox = [&CameraVisibleSize, &RangeRotation](UBoxComponent* RefreshBox, float Scale)
+	{
+		if (!RefreshBox)
+		{
+			return;
+		}
+
+		RefreshBox->SetWorldRotation(RangeRotation);
+		RefreshBox->SetBoxExtent(
+			FVector(
+				CameraVisibleSize.X * 0.5f * Scale,
+				CameraVisibleSize.Y * 0.5f * Scale,
+				RefreshBoxSafeHalfHeight),
+			false);
+	};
+
+	UpdateBox(ViewPortBox, 1.f);
+	UpdateBox(LogicBox, LogicScale);
+	UpdateBox(LifeSpanLimit, LifeSpanScale);
+}
+
+FVector2D APlaygroundPlayerPawn::CalculateCameraVisibleSize() const
+{
+	if (!Camera)
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	const float AspectRatio = FMath::Max(Camera->AspectRatio, KINDA_SMALL_NUMBER);
+	if (Camera->ProjectionMode == ECameraProjectionMode::Orthographic)
+	{
+		const float Width = FMath::Max(Camera->OrthoWidth, 0.f);
+		return FVector2D(Width, Width / AspectRatio);
+	}
+
+	const FVector CameraLocation = Camera->GetComponentLocation();
+	const FVector CameraForward = Camera->GetForwardVector();
+	if (FMath::IsNearlyZero(CameraForward.Z))
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	const float DistanceToGameplayPlane = FMath::Abs((GetActorLocation().Z - CameraLocation.Z) / CameraForward.Z);
+	const float HalfHorizontalSize =
+		FMath::Tan(FMath::DegreesToRadians(Camera->FieldOfView * 0.5f)) * DistanceToGameplayPlane;
+	const float Width = HalfHorizontalSize * 2.f;
+	return FVector2D(Width, Width / AspectRatio);
+}
+
+float APlaygroundPlayerPawn::GetLogicRefreshScale() const
+{
+	UWorld* World = GetWorld();
+	const AChemicalBondGameMode* ChemicalBondGameMode =
+		World ? World->GetAuthGameMode<AChemicalBondGameMode>() : nullptr;
+	return FMath::Max(ChemicalBondGameMode ? ChemicalBondGameMode->GetLogicSizeAdopter() : 1.2f, 0.01f);
+}
+
+float APlaygroundPlayerPawn::GetLifeSpanRefreshScale() const
+{
+	UWorld* World = GetWorld();
+	const AChemicalBondGameMode* ChemicalBondGameMode =
+		World ? World->GetAuthGameMode<AChemicalBondGameMode>() : nullptr;
+	return FMath::Max(ChemicalBondGameMode ? ChemicalBondGameMode->GetLifeSpanSizeAdopter() : 2.f, 0.01f);
 }

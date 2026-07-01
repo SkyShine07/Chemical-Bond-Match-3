@@ -38,6 +38,11 @@ void APlaygroundAtom::ConfigurePlaygroundAtom(EAtomElementType InElementType)
 	RefreshVisuals();
 }
 
+void APlaygroundAtom::ConfigureElementType(EAtomElementType InElementType)
+{
+	ConfigurePlaygroundAtom(InElementType);
+}
+
 void APlaygroundAtom::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
@@ -74,6 +79,7 @@ void APlaygroundAtom::GetPlaygroundAtomDefaults(
 	switch (InElementType)
 	{
 	case EAtomElementType::H:
+	case EAtomElementType::H_Normal:
 		OutMass = 1.f;
 		OutSlots = 1;
 		break;
@@ -99,6 +105,11 @@ void APlaygroundAtom::GetPlaygroundAtomDefaults(
 		OutMass = 31.f;
 		OutSlots = 5;
 		break;
+	case EAtomElementType::P_Ring:
+		OutMass = 31.f;
+		OutSlots = 5;
+		bOutCanFormRing = true;
+		break;
 	case EAtomElementType::C_Ring:
 		OutMass = 12.f;
 		OutSlots = 4;
@@ -118,6 +129,7 @@ FText APlaygroundAtom::GetElementLabelText(EAtomElementType InElementType)
 	switch (InElementType)
 	{
 	case EAtomElementType::H:
+	case EAtomElementType::H_Normal:
 		return FText::FromString(TEXT("H"));
 	case EAtomElementType::O_Normal:
 		return FText::FromString(TEXT("O"));
@@ -129,6 +141,8 @@ FText APlaygroundAtom::GetElementLabelText(EAtomElementType InElementType)
 		return FText::FromString(TEXT("N*"));
 	case EAtomElementType::P_Normal:
 		return FText::FromString(TEXT("P"));
+	case EAtomElementType::P_Ring:
+		return FText::FromString(TEXT("P*"));
 	case EAtomElementType::C_Player:
 		return FText::FromString(TEXT("C_Player"));
 	case EAtomElementType::C_Ring:
@@ -144,6 +158,7 @@ FLinearColor APlaygroundAtom::GetElementColor(EAtomElementType InElementType)
 	switch (InElementType)
 	{
 	case EAtomElementType::H:
+	case EAtomElementType::H_Normal:
 		return FLinearColor(0.9f, 0.95f, 1.f);
 	case EAtomElementType::O_Normal:
 	case EAtomElementType::O_Ring:
@@ -152,6 +167,7 @@ FLinearColor APlaygroundAtom::GetElementColor(EAtomElementType InElementType)
 	case EAtomElementType::N_Ring:
 		return FLinearColor(0.2f, 0.35f, 1.f);
 	case EAtomElementType::P_Normal:
+	case EAtomElementType::P_Ring:
 		return FLinearColor(0.95f, 0.7f, 0.2f);
 	case EAtomElementType::C_Player:
 		return FLinearColor(0.15f, 0.9f, 0.65f);

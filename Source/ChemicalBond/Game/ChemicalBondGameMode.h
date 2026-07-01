@@ -28,12 +28,24 @@ public:
 	UFUNCTION(BlueprintPure, Category="ChemicalBond|Director")
 	AChemicalBondGameDirector* GetGameDirector() const;
 
+	UFUNCTION(BlueprintPure, Category="ChemicalBond|Refresh")
+	float GetLogicSizeAdopter() const { return LogicSizeAdopter; }
+
+	UFUNCTION(BlueprintPure, Category="ChemicalBond|Refresh")
+	float GetLifeSpanSizeAdopter() const { return LifeSpanSizeAdopter; }
+
 protected:
 	// Director 配置
 	// 蓝图配置：Class=ChemicalBondGameMode 派生蓝图，Range=AChemicalBondGameDirector 派生类，
 	// Effect=控制每局开始时由 GameMode 生成并持有的规则编排 Actor 类型。
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Director")
 	TSubclassOf<AChemicalBondGameDirector> GameDirectorClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(ClampMin="0.01"))
+	float LogicSizeAdopter = 1.2f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="ChemicalBond|Refresh", meta=(ClampMin="0.01"))
+	float LifeSpanSizeAdopter = 2.f;
 
 private:
 	// Director 生命周期

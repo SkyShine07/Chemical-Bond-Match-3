@@ -138,6 +138,9 @@ public:
     EAtomElementType GetElementType() const { return ElementType; }
 
     UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    bool CanFormRing() const { return bCanFormRing; }
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
     FGuid GetAtomUid() const { return AtomUid; }
 
     UFUNCTION(BlueprintCallable, Category = "原子|查询")
@@ -148,6 +151,8 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "原子|查询")
     UFluidMotionComponent* GetFluidMotionComponent() const { return FluidMotionComponent; }
+
+    virtual void ConfigureElementType(EAtomElementType InElementType);
 
     UFUNCTION(BlueprintCallable, Category = "ChemicalBond|Plane")
     void ConstrainToGameplayPlane();
@@ -172,6 +177,9 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "原子|查询")
     bool IsProximityOverlappingAtom(AAtomBase* OtherAtom) const;
+
+    UFUNCTION(BlueprintCallable, Category = "原子|查询")
+    EAtomInteractionRangeVisualState GetInteractionRangeVisualState() const;
 
     // -----------------------------------------------------------------------
     // Blueprint 可调用方法 — 槽位与键操作
@@ -215,18 +223,24 @@ public:
     UFUNCTION(BlueprintCallable, Category = "原子|状态")
     void BeginInteractionCooldown(float CooldownSeconds);
 
+    UFUNCTION(BlueprintCallable, Category = "原子|状态")
+    void SetInteractionRangeVisualApplicable(bool bInApplicable);
+
     UFUNCTION(BlueprintCallable, Category = "原子|表现")
     void RefreshSlotVisualLayout();
 
     UFUNCTION(BlueprintCallable, Category = "原子|表现")
     void NotifyBondLayoutChanged();
 
+    // 成环槽位角度覆盖：成环时由 Director 设置指定槽位指向相邻环顶点的本地角度，
+    // 使参与环的原子键槽滑动并形成均匀正多边形。优先级高于多键展开与默认轨道角度。
+    void SetRingSlotAngleOverrideDegrees(int32 SlotIndex, float LocalAngleDegrees);
+    void ClearRingSlotAngleOverride(int32 SlotIndex);
+    void ClearAllRingSlotAngleOverrides();
+
 private:
     UPROPERTY()
     USphereComponent* ProximitySphere = nullptr;
-
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "原子|交互范围", meta = (AllowPrivateAccess = "true"))
-    UStaticMeshComponent* ProximityVisualMesh = nullptr;
 
     UPROPERTY(Transient)
     TArray<TObjectPtr<UStaticMeshComponent>> SlotVisualMeshes;
@@ -253,11 +267,17 @@ private:
     UPROPERTY()
     TArray<FBondRecord> Bonds;
 
+    // 成环时各槽位的本地角度覆盖（槽位索引 -> 角度，单位度）。空表示无覆盖。
+    TMap<int32, float> RingSlotAngleOverridesDegrees;
+
     UPROPERTY()
     EAtomState AtomState = EAtomState::Free;
 
     UPROPERTY(Transient)
     float InteractionCooldownEndTime = 0.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "原子|交互范围表现", meta = (AllowPrivateAccess = "true"))
+    bool bInteractionRangeVisualApplicable = true;
 
     // 蓝图配置：Class=原子 Blueprint 派生类，Range=1.0..1000.0，
     // Effect=定义原子本体直径，并作为槽位球尺寸和槽位对齐距离的基准。
@@ -281,8 +301,6 @@ private:
 
     void InitFromDataTable();
     void ApplyTemporaryInteractionRadiusFromMass();
-    void RefreshProximityVisual();
-    void DrawProximityIndicator();
     void RebuildSlotVisualMeshes();
     FVector GetSlotRelativeLocation(int32 SlotIndex) const;
     bool TryGetMultiBondSlotAngleDegrees(int32 SlotIndex, float& OutAngleDegrees) const;
